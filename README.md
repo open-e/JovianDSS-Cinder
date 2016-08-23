@@ -2,7 +2,7 @@
 
 ## Description
 
-This repository contains source files for the JovianDSS volume driver.
+This repository contains source files for the JovianDSS Cinder volume driver.
 
 ## Installation
 
@@ -13,10 +13,16 @@ This repository contains source files for the JovianDSS volume driver.
 git clone https://github.com/Open-E/JovianDSS.git
 ```
 
+Copy __*joviandss*__ folder to your Cinder driver folder.
+For instance if your Cinder is located at __*/opt/stack/cinder/*__, the command will looks like:
+
+```bash
+cp -R JovianDSS-Cinder/joviandss /opt/stack/cinder/cinder/volume/drivers/
+```
 
 ### Configuring
 
-Edit with your faivorite editor Cinder config file. 
+Edit with your favorite editor Cinder config file. 
 It can be found at /etc/cinder/cinder.conf
 
 Add the field enabled\_backends with value joviandss:
@@ -24,7 +30,6 @@ Add the field enabled\_backends with value joviandss:
 ```
 enabled_backends = joviandss
 ```
-
 Provide settings to JovianDSS driver by adding 'joviandss' description:
 
 ```
@@ -49,9 +54,9 @@ jovian_rest_send_repeats = 4
 | Property   	|  Default value  	|  Description 	|
 |:----------:	|:-------------:	|:------:	|
 | volume\_driver|   			| Specify location of the driver source code |
-| volume\_backend\_name 	|      	| Name of the backend 	|
+| volume\_backend\_name 	|   JovianDSS-iSCSI   	| Name of the back end 	|
 | jovian\_rest\_protocol 	| https | Protocol to connect to JovianDSS. Https must be enabled on the JovianDSS site [1].  |
-| jovian\_host   | 	|               | IP adddres of the JovianDSS |  
+| jovian\_host   | 	               | IP addres of the JovianDSS |  
 | jovian\_rest\_port | 82               | Must be set according to the settings in [1] |
 | jovian\_user       | admin            | Must be set according to the settings in [1] |
 | jovian\_password   | admin            | Must be set according to the settings in [1] |
@@ -59,9 +64,9 @@ jovian_rest_send_repeats = 4
 | jovian\_target\_prefix | iqn.2016-04.com.open-e:01:cinder- | Prefix that will be used to form target name for volume |
 | jovian\_pool | Cinder-Pool-0 | Pool name that is going to be used to store volumes. Must be created in [2] |
 | jovian\_chap\_auth | True | Enable/Disable CHAP authentication as required to connect newly created volumes, write "False" to disable |
-| jovian\_chap\_pass\_len | 12 | Specify length of the CHAP password --- each volume will get unic randomly generated password |
-| jovian\_chap\_username | admin | Default user name for the CHAP auth to the specific volume |
-| jovian\_rest\_send\_repeats | 3 | Number of times tha CinderDriver will provide in sending REST requst. |
+| jovian\_chap\_pass\_len | 12 | Specify length of the CHAP password --- each volume will get unique randomly generated password |
+| jovian\_chap\_username | admin | Default user name for the CHAP authentication to the specific volume |
+| jovian\_rest\_send\_repeats | 3 | Number of times that CinderDriver will provide to send REST request. |
 
 
 [1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access 
@@ -74,13 +79,13 @@ jovian_rest_send_repeats = 4
 
 Now you should restart Cinder service.
 
-Create new volume type according to the backend name provided previously:
+Create new volume type according to the back end name provided previously:
 
 ```bash
 $ cinder type-create joviandss
 ```
 
-Response would be(ID is unicue ID, you will have different value):
+Response would be(ID is unique ID, you will have different value):
 ```
 +--------------------------------------+-----------+-------------+-----------+
 |                  ID                  |    Name   | Description | Is_Public |
@@ -169,5 +174,4 @@ Now if you go to the JovianDSS Web interface you will see volume with name:
 ## Feedback
 
 Please address problems and proposals to andrei.perepiolkin@open-e.com
-
 
