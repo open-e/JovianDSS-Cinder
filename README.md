@@ -16,7 +16,7 @@ git clone https://github.com/Open-E/JovianDSS.git
 
 ### Configuring
 
-Edit with your faivorite editor Cinder config file. \
+Edit with your faivorite editor Cinder config file. 
 It can be found at /etc/cinder/cinder.conf
 
 Add the field enabled\_backends with value joviandss:
@@ -50,7 +50,7 @@ jovian_rest_send_repeats = 4
 |:----------:	|:-------------:	|:------:	|
 | volume\_driver|   			| Specify location of the driver source code |
 | volume\_backend\_name 	|      	| Name of the backend 	|
-| jovian\_rest\_protocol 	| https | Protocol to connect to JovianDSS. Https must be enabled on the JovianDSS site[1].  |
+| jovian\_rest\_protocol 	| https | Protocol to connect to JovianDSS. Https must be enabled on the JovianDSS site [1].  |
 | jovian\_host   | 	|               | IP adddres of the JovianDSS |  
 | jovian\_rest\_port | 82               | Must be set according to the settings in [1] |
 | jovian\_user       | admin            | Must be set according to the settings in [1] |
@@ -64,7 +64,7 @@ jovian_rest_send_repeats = 4
 | jovian\_rest\_send\_repeats | 3 | Number of times tha CinderDriver will provide in sending REST requst. |
 
 
-[1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access \
+[1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access 
 [2] [Can be created by going to JovianDSS Web interface/Storage](https://www.open-e.com/site_media/download/documents/Open-E-JovianDSS-High-Availability-Cluster-Step-by-Step.pdf)
 
 
