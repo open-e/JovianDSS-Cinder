@@ -35,14 +35,14 @@ Provide settings to JovianDSS driver by adding 'joviandss' description:
 ```
 [joviandss]
 volume_driver = cinder.volume.drivers.joviandss.iscsi.JovianISCSIDriver
-volume_backend_name = Jovian_iSCSI
+volume_backend_name = joviandss
 jovian_rest_protocol = https
 jovian_host = 192.168.10.102
 jovian_rest_port = 82
 jovian_user = admin
 jovian_password = admin
 jovian_iscsi_target_portal_port = 3260
-jovian_target_prefix = iqn.2016-04.com.open-e:01:cinder- 
+jovian_target_prefix = iqn.2016-04.com.open-e.cinder: 
 jovian_pool = Cinder
 jovian_chap_auth = True
 jovian_chap_pass_len = 14
