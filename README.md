@@ -20,6 +20,35 @@ For instance if your Cinder is located at __*/opt/stack/cinder/*__, the command 
 cp -R JovianDSS-Cinder/joviandss /opt/stack/cinder/cinder/volume/drivers/
 ```
 
+Add exception handlers by executing:
+
+```bash
+cat <<EOT >> /opt/stack/cinder/cinder/exception.py
+
+
+class JDSSException(VolumeDriverException):
+    message = _("JovianDSS driver faced an error: %(reason)s.")
+
+
+class JDSSRESTException(JDSSException):
+    message = _(""
+                "JovianDSS REST request %(request) faild because: "
+                "%(reason)s.")
+
+
+class JDSSRESTProxyException(JDSSException):
+    message = _(""
+                "JovianDSS connection with %(host) failed because: "
+                "%(reason)s.")
+
+
+class JDSSRESTResourceNotFoundException(JDSSException):
+    message = _("JovianDSS unable to found resource %(message)s.")
+
+EOT
+
+```
+
 ### Configuring
 
 Edit with your favorite editor Cinder config file. 
