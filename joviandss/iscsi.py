@@ -22,7 +22,6 @@ import string
 
 from cinder import exception
 from cinder.i18n import _
-from cinder.i18n import _LE
 from cinder.volume import driver
 from cinder.volume.drivers.open_e.jovian_common import jdss_common as jcom
 from cinder.volume.drivers.open_e.jovian_common import rest
@@ -133,8 +132,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     def check_for_setup_error(self):
         """Verify that the pool exists."""
         if not self.ra.is_pool_exists(self.pool):
-            msg = _LE("Setup is incorrect, please check connection settings.")
-            LOG.error(msg)
+            LOG.error("Setup is incorrect, please check connection settings.")
             raise exception.VolumeDriverException("Bad configuration expected")
     # TODO(andrei.perepiolkin@open-e.com): Provide additional checks
 
@@ -167,8 +165,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             self.ra.create_lun(self.pool, vname, volume['size'] * o_units.Gi)
 
         except exception.JDSSRESTException as ex:
-            msg = _LE("Create volume error. Because %s.")
-            LOG.error(msg, ex.message)
+            LOG.error("Create volume error. Because %(err).",{"err": ex.message})
             raise exception.VolumeBackendAPIException(
                 message=('JovianDSS: Failed to create volume %s.',
                          volume['id']))
@@ -203,7 +200,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             self.ra.delete_lun(self.pool, volume_name)
         except exception.JDSSRESTException as err:
             if "volume is busy" == err.args[0]:
-                LOG.error(_LE('Failed to delete volume %s'), volume['id'])
+                LOG.error('Failed to delete volume %(id)', {"id":volume['id']})
                 raise exception.VolumeIsBusy(
                     data=('Failed to delete volume %s', volume['id']))
             raise exception.VolumeBackendAPIException(
@@ -308,7 +305,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except exception.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
-                LOG.error(_LE('Failed to create volume %s.'), volume_name)
+                LOG.error('Failed to create volume %(vname).', {'vname':volume_name})
                 raise exception.VolumeBackendAPIException(
                     "Unable to create volume.")
 
@@ -372,13 +369,11 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 snapshot['id'])
 
         except exception.JDSSRESTException as err:
-            msg = _LE('JovianDSS: Failed to create snapshot %(snap)s'
-                      'for volume %(vol)s %(msg)s.') % {
+            LOG.error('JovianDSS: Failed to create snapshot %(snap)'
+                      'for volume %(vol) %(msg).') % {
                           'snap': snapshot['id'],
                           'vol': snapshot['volume_id'],
                           'msg': err.message}
-
-            LOG.error(msg)
 
             raise exception.VolumeBackendAPIException(msg)
 
