@@ -63,7 +63,7 @@ Provide settings to JovianDSS driver by adding 'joviandss' description:
 
 ```
 [joviandss]
-volume_driver = cinder.volume.drivers.open-e.iscsi.JovianISCSIDriver
+volume_driver = cinder.volume.drivers.open_e.iscsi.JovianISCSIDriver
 volume_backend_name = joviandss
 jovian_rest_protocol = https
 jovian_host = 192.168.10.102
