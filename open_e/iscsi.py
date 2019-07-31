@@ -554,7 +554,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             use_chap = True
 
         # Deny all connections by default
-        deny_ip_list = ['0.0.0.0/0']
+        deny_ip_list = []
         try:
             self.ra.create_target(self.pool,
                                   target_name,
