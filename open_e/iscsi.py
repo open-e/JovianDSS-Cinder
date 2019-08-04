@@ -117,6 +117,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         self.jovian_password_len = \
             self.configuration.safe_get('jovian_chap_pass_len')
 
+        self.jovian_sparse = \
+            self.configuration.safe_get('jovian_provisioning_thin')
+
         if o_netutils.is_valid_ip(self.jovian_host) is False:
             err_msg = ('JovianDSS: Invalid value of jovian_host property:'
                        '%(addr)s, IP address expected.' %
@@ -162,10 +165,14 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         provider_auth = self._get_provider_auth()
 
         try:
-            self.ra.create_lun(self.pool, vname, volume['size'] * o_units.Gi)
+            self.ra.create_lun(self.pool,
+                               vname,
+                               volume['size'] * o_units.Gi,
+                               sparse=self.jovian_sparse)
 
         except exception.JDSSRESTException as ex:
-            LOG.error("Create volume error. Because %(err).",{"err": ex.message})
+            LOG.error("Create volume error. Because %(err).",
+                      {"err": ex.message})
             raise exception.VolumeBackendAPIException(
                 message=('JovianDSS: Failed to create volume %s.',
                          volume['id']))

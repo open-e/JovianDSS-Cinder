@@ -77,6 +77,7 @@ jovian_chap_auth = True
 jovian_chap_pass_len = 14
 jovian_chap_username = user
 jovian_rest_send_repeats = 4
+jovian_provisioning_thin = True
 ```
 	
 
@@ -96,6 +97,7 @@ jovian_rest_send_repeats = 4
 | jovian\_chap\_pass\_len | 12 | Specify length of the CHAP password --- each volume will get unique randomly generated password |
 | jovian\_chap\_username | admin | Default user name for the CHAP authentication to the specific volume |
 | jovian\_rest\_send\_repeats | 3 | Number of times that CinderDriver will provide to send REST request. |
+| jovian\_provisioning\_thin | False | Using thin provisioniung type for volumes |
 
 
 [1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access 

@@ -79,7 +79,7 @@ class JovianRESTAPI(object):
         else:
             raise exception.JDSSRESTException(resp['error']['message'])
 
-    def create_lun(self, pool_name, volume_name, volume_size):
+    def create_lun(self, pool_name, volume_name, volume_size, sparse=False):
         """create_volume.
 
         POST
@@ -94,7 +94,8 @@ class JovianRESTAPI(object):
         volume_size_str = str(volume_size)
         jbody = {
             'name': volume_name,
-            'size': volume_size_str
+            'size': volume_size_str,
+            'sparse': sparse
         }
 
         req = self.url + path
