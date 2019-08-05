@@ -67,7 +67,7 @@ jdss_volume_opts = [
     cfg.StrOpt('jovian_blocksize',
                default='8KB',
                help='Block size for volumes (512B - 128KB)'),
-    cfg.BoolOpt('jovian_sparse',
+    cfg.BoolOpt('jovian_provisioning_thin',
                 default=False,
                 help='Enables or disables the creation of sparse'
                      ' (thin-provisioned) volumes'),
