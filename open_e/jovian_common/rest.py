@@ -59,6 +59,26 @@ class JovianRESTAPI(object):
 
         return True
 
+    def get_iface_info(self):
+        """get_iface_info
+        
+        GET
+        /network/interfaces
+        :return list of internet ifaces  
+        """ 
+        path = self.api_path + '/network/interfaces'
+
+        req = self.url + path
+
+        LOG.debug("JovianDSS: get interfaces [url]: {}".format(req))
+
+        resp = self.rproxy.request('GET', req)
+        if resp['error'] is None and resp['code'] == 200:
+            return resp['data']
+        else:
+            raise exception.JDSSRESTException(resp['error']['message'])
+        
+
     def get_luns(self, pool_name):
         """get_all_pool_volumes.
 

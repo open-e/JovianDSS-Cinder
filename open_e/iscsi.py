@@ -104,6 +104,11 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             'jovian_user')
         self.conf['jovian_password'] = self.configuration.safe_get(
             'jovian_password')
+        self.conf['jovian_ignore_tpath'] = self.configuration.safe_get(
+            'jovian_ignore_tpath')
+
+        for i in self.conf['jovian_ignore_tpath']:
+            LOG.debug(i)
 
         self.jovian_chap_username = \
             self.configuration.safe_get('jovian_chap_username')
@@ -151,6 +156,30 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         """Return JovianDSS iSCSI target group name for volume."""
         return '%s%s' % (self.jovian_target_group_prefix,
                          volume_name)
+
+    def _get_active_ifaces(self):
+        iface_info = self.ra.get_iface_info()
+        if iface_info is None:
+            LOG.debug('JovianDSS: Unable to get net interface info')
+
+            raise exception.VolumeBackendAPIException(
+                'JovianDSS: Unable to get net interface info')
+
+        out = list()
+        for iface in iface_info:
+            up = (iface['is_up'] and
+                  iface['operational_state'] == 'up' and
+                  iface['status'] == 'connected' and
+                  iface['type'] == 'interface')
+            if up is False:
+                continue
+            if not self.conf['jovian_ignore_tpath']:
+                out.append(iface['address'])
+                continue
+            if iface['address'] not in self.conf['jovian_ignore_tpath']:
+                out.append(iface['address'])
+        LOG.debug('JovianDSS: interfaces found %s', str(out))
+        return out
 
     def create_volume(self, volume):
         """Create a volume.
@@ -376,11 +405,11 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 snapshot['id'])
 
         except exception.JDSSRESTException as err:
-            LOG.error('JovianDSS: Failed to create snapshot %(snap)'
-                      'for volume %(vol) %(msg).') % {
-                          'snap': snapshot['id'],
-                          'vol': snapshot['volume_id'],
-                          'msg': err.message}
+            LOG.error(('JovianDSS: Failed to create snapshot %(snap)'
+                       'for volume %(vol) %(msg).') % {
+                           'snap': snapshot['id'],
+                           'vol': snapshot['volume_id'],
+                           'msg': err.message})
 
             raise exception.VolumeBackendAPIException(msg)
 
@@ -640,10 +669,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 return
             else:
                 if self.ra.attach_target_vol(
-                    self.pool,
-                    target_name,
-                    volume["id"]) \
-                        is False:
+                        self.pool,
+                        target_name,
+                        volume["id"]) is False:
 
                     msg = _('Unable to attach volume %(vol)s to'
                             ' target %(targ)s') % {
@@ -702,7 +730,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 'err': str(ex.args[0])})
         return
 
-    def _get_iscsi_properties(self, volume):
+    def _get_iscsi_properties(self, volume, connector):
         """Return dict according to cinder/driver.py implementation.
 
         :param volume:
@@ -719,11 +747,37 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 'JovianDSS: Unable to get'
                 ' zvolume lun for volume %s.', vname)
 
+        iface_info = []
+        multipath = connector.get('multipath', False)
+        if multipath is True:
+            iface_info = self._get_active_ifaces()
+            if not iface_info:
+                raise exception.InvalidConfigurationValue(
+                    'JovianDSS: No available interfaces '
+                    'or config excludes them')
+
         iscsi_properties = dict()
+
+        if multipath:
+            iscsi_properties['target_iqns'] = []
+            iscsi_properties['target_portals'] = []
+            iscsi_properties['target_luns'] = []
+            LOG.debug('JovianDSS: tpaths %s.', str(iface_info))
+            for iface in iface_info:
+                iscsi_properties['target_iqns'].append(
+                    self.jovian_target_prefix +
+                    vname)
+                iscsi_properties['target_portals'].append(
+                    iface +
+                    ":" +
+                    self.jovian_iscsi_target_portal_port)
+                iscsi_properties['target_luns'].append(int(zvol_info["lun"]))
+        else:
+            iscsi_properties['target_iqn'] = self.jovian_target_prefix + vname
+            iscsi_properties['target_portal'] = \
+                self.jovian_host + ":" + self.jovian_iscsi_target_portal_port
+
         iscsi_properties['target_discovered'] = False
-        iscsi_properties['target_iqn'] = self.jovian_target_prefix + vname
-        iscsi_properties['target_portal'] = \
-            self.jovian_host + ":" + self.jovian_iscsi_target_portal_port
 
         auth = volume['provider_auth']
         if auth:
@@ -753,7 +807,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 }
             }
         """
-        iscsi_properties = self._get_iscsi_properties(volume)
+        iscsi_properties = self._get_iscsi_properties(volume, connector)
 
         target_name = self.jovian_target_prefix + volume["id"]
 
