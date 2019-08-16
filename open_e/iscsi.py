@@ -167,10 +167,27 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         out = list()
         for iface in iface_info:
-            up = (iface['is_up'] and
-                  iface['operational_state'] == 'up' and
-                  iface['status'] == 'connected' and
-                  iface['type'] == 'interface')
+            up = True
+            if 'is_up' in iface:
+                up = up and iface['is_up']
+            else:
+                up = False
+
+            if 'operational_state' in iface:
+                up = up and (iface['operational_state'] == 'up')
+            else:
+                up = False
+
+            if 'status' in iface:
+                up = up and (iface['status'] == 'connected')
+            else:
+                up = False
+
+            if 'type' in iface:
+                up = up and (iface['type'] == 'interface')
+            else:
+                up = False
+
             if up is False:
                 continue
             if not self.conf['jovian_ignore_tpath']:
