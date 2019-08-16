@@ -757,7 +757,7 @@ class JovianRESTAPI(object):
             'Failed to create snapshot {}.'.format(resp['error']['message']))
 
     def create_volume_from_snapshot(self, pool_name, volume_name,
-                                    snapshot_name, original_vol_name):
+                                    snapshot_name, original_vol_name, **options):
         """create_volume_from_snapshot.
 
         POST /pools/<string:poolname>/volumes/<string:volumename>/clone
@@ -772,8 +772,12 @@ class JovianRESTAPI(object):
 
         jbody = {
             'name': volume_name,
-            'snapshot': snapshot_name
+            'snapshot': snapshot_name,
+            'sparse': False
         }
+
+        if 'sparse' in options:
+            jbody['sparse'] = options['sparse']
 
         req = self.url + path
 

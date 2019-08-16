@@ -354,7 +354,8 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 self.pool,
                 volume_name,
                 tmp_snapshot_name,
-                src_vref_name)
+                src_vref_name,
+                sparse=self.jovian_sparse)
 
         except exception.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
@@ -388,7 +389,8 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 self.pool,
                 volume['id'],
                 snapshot['id'],
-                snapshot['volume_id'])
+                snapshot['volume_id'],
+                sparse=self.jovian_sparse)
 
         except exception.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
