@@ -36,6 +36,9 @@ jdss_connection_opts = [
                default='password',
                help='Password to connect to Open-E JovianDSS SA',
                secret=True),
+    cfg.ListOpt('jovian_ignore_tpath',
+                default=[],
+                help='List of multipath ip addresses to ignore.')
 ]
 
 jdss_iscsi_opts = [
