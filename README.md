@@ -78,6 +78,7 @@ jovian_chap_pass_len = 14
 jovian_chap_username = user
 jovian_rest_send_repeats = 4
 jovian_provisioning_thin = True
+jovian_ignore_tpath = 192.168.10.105,192.168.10.106
 ```
 	
 
@@ -98,7 +99,7 @@ jovian_provisioning_thin = True
 | jovian\_chap\_username | admin | Default user name for the CHAP authentication to the specific volume |
 | jovian\_rest\_send\_repeats | 3 | Number of times that CinderDriver will provide to send REST request. |
 | jovian\_provisioning\_thin | False | Using thin provisioniung type for volumes |
-
+| jovian\_ignore\_tpath | Empty list | Coma separated list of IP addresses to ignore if multipath is enabled for volume attachment. |
 
 [1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access 
 [2] [Can be created by going to JovianDSS Web interface/Storage](https://www.open-e.com/site_media/download/documents/Open-E-JovianDSS-High-Availability-Cluster-Step-by-Step.pdf)
