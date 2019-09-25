@@ -830,18 +830,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         target_name = self.jovian_target_prefix + volume["id"]
 
-        ip_settings = self.ra.get_target_ip_settings(self.pool, target_name)
-
-        LOG.debug("JovianDSS: initialize_connection for %(volume)s %(ip)s."
-                  "with ip list %(ip_list)s." %
-                  {'volume': volume['id'],
-                   'ip': connector['ip'],
-                   'ip_list': str(ip_settings['allow_ip'])})
-
-        if connector['ip'] not in ip_settings['allow_ip']:
-            ip_settings['allow_ip'].append(connector['ip'])
-            self.ra.set_target_ip_settings(self.pool, target_name, ip_settings)
-
         LOG.debug("JovianDSS: "
                   "providing connection info %s", str(iscsi_properties))
         return {
@@ -856,23 +844,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         from allowed ip list.
         """
 
-        target_name = self.jovian_target_prefix + volume["id"]
-
-        if not self.ra.is_target(self.pool, target_name):
-            return
-
-        ip_settings = self.ra.get_target_ip_settings(self.pool, target_name)
-
-        if connector['ip'] in ip_settings['allow_ip']:
-            ip_settings['allow_ip'].remove(connector['ip'])
-
-            LOG.debug("JovianDSS: terminate_connection for %(volume)s %(ip)s."
-                      "from ip list %(ip_list)s." %
-                      {'volume': volume['id'],
-                       'ip': connector['ip'],
-                       'ip_list': str(ip_settings['allow_ip'])})
-
-            self.ra.set_target_ip_settings(self.pool, target_name, ip_settings)
         return
 
     def attach_volume(self,
