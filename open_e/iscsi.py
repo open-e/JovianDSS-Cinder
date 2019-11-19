@@ -183,11 +183,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             else:
                 up = False
 
-            if 'type' in iface:
-                up = up and (iface['type'] == 'interface')
-            else:
-                up = False
-
             if up is False:
                 continue
             if not self.conf['jovian_ignore_tpath']:
