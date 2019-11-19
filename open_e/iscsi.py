@@ -167,29 +167,28 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         out = list()
         for iface in iface_info:
-            up = True
+
+            if not iface['address']:
+                continue
+
             if 'is_up' in iface:
-                up = up and iface['is_up']
-            else:
-                up = False
+                if not iface['is_up']:
+                    continue
 
             if 'operational_state' in iface:
-                up = up and (iface['operational_state'] == 'up')
-            else:
-                up = False
+                if iface['operational_state'] != 'up':
+                    continue
 
             if 'status' in iface:
-                up = up and (iface['status'] == 'connected')
-            else:
-                up = False
+                if iface['status'] != 'connected':
+                    continue
 
-            if up is False:
-                continue
-            if not self.conf['jovian_ignore_tpath']:
-                out.append(iface['address'])
-                continue
-            if iface['address'] not in self.conf['jovian_ignore_tpath']:
-                out.append(iface['address'])
+            if self.conf['jovian_ignore_tpath']:
+                if iface['address'] in self.conf['jovian_ignore_tpath']:
+                    continue
+
+            out.append(iface['address'])
+
         LOG.debug('JovianDSS: interfaces found %s', str(out))
         return out
 
