@@ -10,7 +10,7 @@ This repository contains source files for the JovianDSS Cinder volume driver.
 ### Get source code
 
 ```bash
-git clone https://github.com/Open-E/JovianDSS.git
+git clone https://github.com/Open-E/JovianDSS-Cinder
 ```
 
 Copy __*joviandss*__ folder to your Cinder driver folder.
