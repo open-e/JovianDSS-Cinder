@@ -19,7 +19,7 @@ from oslo_log import log as logging
 
 from cinder import exception
 from cinder.volume.drivers.open_e.jovian_common import rest_proxy
-
+from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 
 LOG = logging.getLogger(__name__)
 
@@ -29,17 +29,15 @@ class JovianRESTAPI(object):
 
     def __init__(self, config):
 
-        self.url = config.get('jovian_rest_protocol', 'https') + '://' + \
-            config.get('jovian_host') + ':' + \
-            str(config.get('jovian_rest_port'))
-
-        LOG.debug("JovianDSS: rest api base url: {}".format(self.url))
-        self.api_path = "/api/v3"
-        self.timeout = 60
         self.target_p = config.get('jovian_target_prefix')
+        self.pool = config.safe_get('jovian_pool')
         self.rproxy = rest_proxy.JovianRESTProxy(config)
 
-    def is_pool_exists(self, pool_name):
+    def get_active_host(self):
+        """Return address of currently used host."""
+        return self.rproxy.get_active_host()
+
+    def is_pool_exists(self):
         """is_pool_exists.
 
         GET
@@ -48,11 +46,10 @@ class JovianRESTAPI(object):
         :param pool_name:
         :return: Bool
         """
-        path = self.api_path + '/pools/' + pool_name
-        req = self.url + path
-        LOG.debug("JovianDSS: check pool: {}".format(req))
+        req = ""
+        LOG.debug("check pool")
 
-        resp = self.rproxy.request('GET', req)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp["code"] != 200 or resp["error"] is not None:
             return False
@@ -61,25 +58,23 @@ class JovianRESTAPI(object):
 
     def get_iface_info(self):
         """get_iface_info
-        
+
         GET
         /network/interfaces
-        :return list of internet ifaces  
-        """ 
-        path = self.api_path + '/network/interfaces'
+        :return list of internet ifaces
+        """
+        req = '/network/interfaces'
 
-        req = self.url + path
-
-        LOG.debug("JovianDSS: get interfaces [url]: {}".format(req))
+        LOG.debug("get network interfaces")
 
         resp = self.rproxy.request('GET', req)
         if resp['error'] is None and resp['code'] == 200:
             return resp['data']
         else:
-            raise exception.JDSSRESTException(resp['error']['message'])
-        
+            raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def get_luns(self, pool_name):
+
+    def get_luns(self):
         """get_all_pool_volumes.
 
         GET
@@ -87,30 +82,26 @@ class JovianRESTAPI(object):
         :param pool_name
         :return list of all pool volumes
         """
-        path = self.api_path + '/pools/' + pool_name + '/volumes'
+        req = '/volumes'
 
-        req = self.url + path
-
-        LOG.debug("JovianDSS: get all pool volumes [url]: {}".format(req))
-        resp = self.rproxy.request('GET', req)
+        LOG.debug("get all volumes")
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp['error'] is None and resp['code'] == 200:
             return resp['data']
         else:
-            raise exception.JDSSRESTException(resp['error']['message'])
+            raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def create_lun(self, pool_name, volume_name, volume_size, sparse=False):
+    def create_lun(self, volume_name, volume_size, sparse=False):
         """create_volume.
 
         POST
-        /pools/<string:poolname>/volumes
+        .../volumes
 
-        :param pool_name:
         :param volume_name:
         :param volume_size:
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + '/volumes'
         volume_size_str = str(volume_size)
         jbody = {
             'name': volume_name,
@@ -118,10 +109,10 @@ class JovianRESTAPI(object):
             'sparse': sparse
         }
 
-        req = self.url + path
+        req = '/volumes'
 
-        LOG.debug("JovianDSS: create lun [url]: {}".format(req))
-        resp = self.rproxy.request('POST', req, json_data=jbody)
+        LOG.debug("create volume %s", str(jbody))
+        resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
         if resp["error"] is None and (
                 resp["code"] == 200 or resp["code"] == 201):
@@ -129,64 +120,60 @@ class JovianRESTAPI(object):
 
         if resp["error"] is not None:
             if resp["error"]["errno"] == str(5):
-                raise exception.JDSSRESTException(
+                raise jexc.JDSSRESTException(
                     'Failed to create volume. {}.'.format(
                         resp['error']['message']))
 
-        raise exception.JDSSRESTException('Failed to create volume.')
+        raise jexc.JDSSRESTException('Failed to create volume.')
 
-    def extend_lun(self, pool_name, volume_name, volume_size):
+    def extend_lun(self, volume_name, volume_size):
         """create_volume.
 
-        PUT /pools/<string:poolname>/volumes/<string:volume_name>
+        PUT /volumes/<string:volume_name>
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name
+        req = '/volumes/' + volume_name
         # TODO(andrei.perepiolkin@open-e.com):rethink volume size
         volume_size_str = str(volume_size)
         jbody = {
             'size': volume_size_str
         }
 
-        req = self.url + path
-
-        LOG.debug("JovianDSS: extend lun [url]: {}".format(req))
-        resp = self.rproxy.request('PUT', req, json_data=jbody)
+        LOG.debug("jdss extend volume %(volume)s to %(size)s",
+                {"volume": volume_name,
+                 "size": volume_size_str})
+        resp = self.rproxy.pool_request('PUT', req, json_data=jbody)
 
         if resp["error"] is None and resp["code"] == 201:
             return
 
         if resp["error"] is not None:
-            raise exception.JDSSRESTException(
+            raise jexc.JDSSRESTException(
                 'Failed to extend volume {}'.format(resp['error']['message']))
 
-        raise exception.JDSSRESTException('Failed to create volume.')
+        raise jexc.JDSSRESTException('Failed to create volume.')
 
-    def is_lun(self, pool_name, volume_name):
+    def is_lun(self, volume_name):
         """is_lun.
 
-        GET /pools/<string:poolname>/volumes/<string:volumename>
+        GET /volumes/<string:volumename>
         Returns True if volume exists. Uses GET request.
         :param pool_name:
         :param volume_name:
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name
-        req = self.url + path
+        req = '/volumes/' + volume_name
 
-        LOG.debug("JovianDSS: check lun [url]: {}".format(req))
-        ret = self.rproxy.request('GET', req)
+        LOG.debug("check volume %s", volume_name)
+        ret = self.rproxy.pool_request('GET', req)
 
         if ret["error"] is None and ret["code"] == 200:
             return True
         return False
 
-    def get_lun(self, pool_name, volume_name):
+    def get_lun(self, volume_name):
         """get_lun.
 
-        GET /pools/<pool_name>/volumes/<volume_name>
-        :param pool_name:
+        GET /volumes/<volume_name>
         :param volume_name:
         :return:
         {
@@ -228,87 +215,95 @@ class JovianRESTAPI(object):
             "error": null
         }
         """
-        path = self.api_path + '/pools/' + pool_name +\
-            '/volumes/' + volume_name
+        req = '/volumes/' + volume_name
 
-        req = self.url + path
-
-        LOG.debug("JovianDSS: get all pool volumes [url]: {}".format(req))
-        resp = self.rproxy.request('GET', req)
+        LOG.debug("get volume %s info", volume_name)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp['error'] is None and resp['code'] == 200:
             return resp['data']
         else:
-            raise exception.JDSSRESTException(resp['error']['message'])
+            raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def delete_lun(self, pool_name, volume_name):
+    def delete_lun(self, volume_name, recursively_children=False):
         """delete_volume.
 
-        DELETE /pools/<string:poolname>/volumes/<string:volumename>
-        :param pool_name:
+        DELETE /volumes/<string:volumename>
         :param volume_name:
         :return:
         """
-        if not self.is_lun(pool_name, volume_name):
+        if not self.is_lun(volume_name):
             return
 
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name
+        jbody = None
+        if recursively_children == True:
+            jbody = {
+                'recursively_children': recursively_children
+            }
 
-        req = self.url + path
-        LOG.debug("JovianDSS: delete lun [url]: {}".format(req))
+        req = '/volumes/' + volume_name
+        LOG.debug(("delete volume:%(vol)s "
+            "recursively children:%(rc)s"),
+            {'vol': volume_name,
+             'rc': str(recursively_children)})
 
-        resp = self.rproxy.request('DELETE', req)
+        resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
 
         if ((resp["code"] == 200) or
                 (resp["code"] == 201) or
                 (resp["code"] == 204)):
             LOG.debug(
-                "JovianDSS: LUN DELETE SUCCESS exiting. {}".format(req))
+                "volume %s deleted", volume_name)
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): implement handling of
-        # situations when volume can't be deleted
-        # or it was already deleted
-        # raise exception.JDSSRESTException(_("volume is busy"))
-        # raise exception.JDSSRESTException(_("volume is dne"))
+        # Handle DNE case
+        if resp["code"] == 404:
+            LOG.debug(
+                "volume %s do not exists, delition success".format(volume_name))
+            return
 
-        if resp["error"] is not None:
-            if "errno" in resp["error"]:
-                if resp["error"]["errno"] == 1:
-                    return
+        #if resp["error"] is not None:
+        #    if "errno" in resp["error"]:
+        #        if resp["error"]["errno"] == 1:
+        #            return
 
-        raise exception.JDSSRESTException('Failed to delete volume.')
+        # Handle volume busy
+        if resp["code"] == 500 and resp["error"] is not None:
+            if resp["error"]["errno"] == 1000:
+                LOG.warning(
+                    "volume %s is busy", volume_name)
+                raise exception.VolumeIsBusy(volume_name=volume_name)
 
-    def get_targets(self, pool_name):
-        """list_targets.
+        raise jexc.JDSSRESTException('Failed to delete volume.')
 
-        GET /pools/<string:poolname>/san/iscsi/targets
-        :param pool_name
-        :return list of all pool targets
-        """
-        if self.is_pool_exists(pool_name):
+    #def get_targets(self, pool_name):
+    #    """list_targets.
 
-            path = self.api_path + '/pools/' + pool_name + '/san/iscsi/targets'
+    #    GET /san/iscsi/targets
+    #    :param pool_name
+    #    :return list of all pool targets
+    #    """
+    #    if self.is_pool_exists(pool_name):
 
-            req = self.url + path
+    #        path = self.api_path + '/pools/' + pool_name + '/san/iscsi/targets'
 
-            LOG.debug("JovianDSS: get list targets [url]: {}".format(req))
-            resp = self.rproxy.request('GET', req)
+    #        req = self.url + path
 
-            if resp['error'] is None and resp['code'] == 200:
-                return resp['data']
-            else:
-                raise exception.JDSSRESTException(resp['error']['message'])
+    #        LOG.debug("jdss get list targets [url]: {}".format(req))
+    #        resp = self.rproxy.request('GET', req)
 
-        else:
-            raise exception.JDSSRESTException("Pool isn't exist")
+    #        if resp['error'] is None and resp['code'] == 200:
+    #            return resp['data']
+    #        else:
+    #            raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def get_zvol_info(self, pool_name, lun_name):
+    #    else:
+    #        raise jexc.JDSSRESTException("Pool isn't exist")
+
+    def get_zvol_info(self, lun_name):
         """get_zvol_info.
 
-        GET /pools/ pool_name /san/iscsi/targets/ target_name /luns/ lun_name
-        :param pool_name:
+        GET /san/iscsi/targets/ target_name /luns/ lun_name
         :param lun_name:
         :return:
         {
@@ -325,38 +320,33 @@ class JovianRESTAPI(object):
         """
         target_name = self.target_p + lun_name
 
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
-        req = self.url + path
+        req = '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
 
-        LOG.debug("JovianDSS: check lun [url]: {}".format(req))
-        resp = self.rproxy.request('GET', req)
+        LOG.debug("check targets %(tar)s volume %(vol)s",
+                {"tar": target_name,
+                 "vol": lun_name})
+
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp["error"] is None and resp["code"] == 200:
             return resp["data"]
 
         # TODO(andrei.perepiolkin@open-e.com): provide additional handling
         # of different error cases
+        msg = 'Failed to get zvol ' + resp['error']['message']
+        raise jexc.JDSSRESTException(reason=msg, request=req)
 
-        raise exception.JDSSRESTException(
-            'Failed to get zvol {}.'.format(resp['error']['message']))
-
-    def is_target(self, pool_name, target_name):
+    def is_target(self, target_name):
         """is_target.
 
-        GET /pools/ pool_name /san/iscsi/targets/ target_name
-        :param pool_name:
+        GET /san/iscsi/targets/ target_name
         :param target_name:
         :return: Bool
         """
-        path = self.api_path + \
-            '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name
+        req = '/san/iscsi/targets/' + target_name
 
-        req = self.url + path
-
-        LOG.debug("JovianDSS: check target [url]: {}".format(req))
-        resp = self.rproxy.request('GET', req)
+        LOG.debug("check if targe %s exists", target_name)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp["error"] is not None or not (
                 resp["code"] == 200 or resp["code"] == 201):
@@ -365,21 +355,19 @@ class JovianRESTAPI(object):
         if "name" in resp["data"]:
             if resp["data"]["name"] == target_name:
                 LOG.debug(
-                    "JovianDSS: Request: {} SCCESS, taget found..".format(req))
+                    "target %s exists", target_name)
                 return True
 
         return False
 
     def create_target(self,
-                      pool_name,
                       target_name,
                       use_chap=False,
                       allow_ip=None,
                       deny_ip=None):
         """create_target.
 
-        POST /pools/<pool_name>/san/iscsi/targets
-        :param pool_name:
+        POST /san/iscsi/targets
         :param target_name:
         :param chap_cred:
         :param allow_ip:
@@ -390,11 +378,9 @@ class JovianRESTAPI(object):
 
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + '/san/iscsi/targets'
-        req = self.url + path
+        req = '/san/iscsi/targets'
 
-        LOG.debug("JovianDSS: create target {} [url]: {}".format(
-            target_name, req))
+        LOG.debug("create target %s", target_name)
 
         jdata = {"name": target_name}
 
@@ -406,56 +392,48 @@ class JovianRESTAPI(object):
         if deny_ip is not None:
             jdata["deny_ip"] = deny_ip
 
-        resp = self.rproxy.request('POST', req, json_data=jdata)
+        resp = self.rproxy.pool_request('POST', req, json_data=jdata)
 
         if resp["error"] is None and resp["code"] == 201:
             return
 
         # TODO(andrei.perepiolkin@open-e.com): provide additional handling
         # of different error cases
+        msg = 'Failed to create target {}.'.format(resp['error']['message'])
+        raise jexc.JDSSRESTException(reason=msg, request=req)
 
-        raise exception.JDSSRESTException(
-            'Failed to create target {}.'.format(resp['error']['message']))
-
-    def delete_target(self, pool_name, target_name):
+    def delete_target(self, target_name):
         """delete_target.
 
-        DELETE pools/<pool_name>/san/iscsi/targets/<target_name>
+        DELETE /san/iscsi/targets/<target_name>
         :param pool_name:
         :param target_name:
         :return:
         """
-        if not self.is_target(pool_name, target_name):
-            return
+        req = '/san/iscsi/targets/' + target_name
 
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name
-        req = self.url + path
+        LOG.debug("delete target %s", target_name)
 
-        LOG.debug(
-            "JovianDSS: delete target {}: {}".format(target_name, req))
-
-        resp = self.rproxy.request('DELETE', req)
+        resp = self.rproxy.pool_request('DELETE', req)
 
         if ((resp["code"] == 200) or
                 (resp["code"] == 201) or
                 (resp["code"] == 204)):
             LOG.debug(
-                "JovianDSS: Target DELETE SUCCESS exiting. {}".format(req))
+                "target %s deleted", target_name)
             return
 
-        if (resp["code"] == 404) and \
+        if (resp["code"] == 404) or \
                 (resp["error"]["class"] == "werkzeug.exceptions.NotFound"):
-            raise exception.JDSSRESTResourceNotFoundException(
-                "Target do not exists")
+            LOG.debug("target %s not found, exiting as success", target_name)
+            return
 
-        raise exception.JDSSRESTException('Failed to delete target.')
+        raise jexc.JDSSRESTException(reason='Failed to delete target.', request=req)
 
-    def modify_target(self, pool_name, target_name, **kwargs):
+    def modify_target(self, target_name, **kwargs):
         """modify_target.
 
-        PUT pools<pool_name>/san/iscsi/targets/<target_name>
-        :param pool_name:
+        PUT /san/iscsi/targets/<target_name>
         :param target_name:
         :parameter
         {
@@ -476,25 +454,21 @@ class JovianRESTAPI(object):
         }
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name
+        req = '/san/iscsi/targets/' + target_name
 
-        req = self.url + path
-
-        resp = self.rproxy.request('PUT', req, json_data=kwargs)
+        resp = self.rproxy.pool_request('PUT', req, json_data=kwargs)
 
         if resp['error'] is not None or resp['code'] != 201:
             if resp['error']['message']:
-                raise exception.JDSSRESTException(resp['error']['message'])
+                raise jexc.JDSSRESTException(reason=resp['error']['message'], request=req)
             else:
-                raise exception.JDSSRESTException('Something wrong')
+                raise jexc.JDSSRESTException(reqson='Something wrong', request=req)
 
-    def get_target_ip_settings(self, pool_name, target_name):
+    def get_target_ip_settings(self, target_name):
         """get_target_ip_settings
 
-        GET pools<pool_name>/san/iscsi/targets/<target_name>
+        GET /san/iscsi/targets/<target_name>
         Use GET to abtain allowed and deny ip lists
-        :param pool_name:
         :param target_name:
         :return:
         {
@@ -507,31 +481,28 @@ class JovianRESTAPI(object):
                         ]
         }
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name
+        req = '/san/iscsi/targets/' + target_name
+        LOG.debug("get target %s settings", target_name)
 
-        req = self.url + path
-
-        resp = self.rproxy.request('GET', req)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp['error'] is not None or not (
                 resp['code'] == 200 or
                 resp['code'] == 201):
             if resp['error']['message']:
-                raise exception.JDSSRESTException(resp['error']['message'])
+                raise jexc.JDSSRESTException(reason=resp['error']['message'], request=req)
             else:
-                raise exception.JDSSRESTException('Something wrong')
+                raise jexc.JDSSRESTException(reason='Something wrong', request=req)
 
         return {
             'allow_ip': resp['data']['allow_ip'],
             'deny_ip': resp['data']['deny_ip']}
 
-    def set_target_ip_settings(self, pool_name, target_name, settings):
+    def set_target_ip_settings(self, target_name, settings):
         """set_target_ip_settings
 
-        PUT pools<pool_name>/san/iscsi/targets/<target_name>
+        PUT /san/iscsi/targets/<target_name>
         Use GET and PUT requests to update allowed and deny ip lists
-        :param pool_name:
         :param target_name:
         :param settings
         {
@@ -545,21 +516,18 @@ class JovianRESTAPI(object):
         }
         :return: Throws JDSSRESTException if fails
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name
+        req = '/san/iscsi/targets/' + target_name
 
-        req = self.url + path
-
-        resp = self.rproxy.request('GET', req)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp['error'] is not None or not (
                 resp['code'] == 200 or
                 resp['code'] == 201):
 
             if resp['error']['message']:
-                raise exception.JDSSRESTException(resp['error']['message'])
+                raise jexc.JDSSRESTException(reason=resp['error']['message'], request=req)
             else:
-                raise exception.JDSSRESTException('Something wrong')
+                raise jexc.JDSSRESTException(reason='Something wrong', request=req)
 
         target_settings = resp['data']
 
@@ -568,24 +536,24 @@ class JovianRESTAPI(object):
 
         target_settings.pop('conflicted')
 
-        resp = self.rproxy.request('PUT', req, json_data=target_settings)
+        LOG.debug("set target %s settings", target_name)
+        resp = self.rproxy.pool_request('PUT', req, json_data=target_settings)
 
         if resp['error'] is not None or not (
                 resp['code'] == 200 or
                 resp['code'] == 201):
             if resp['error']['message']:
-                raise exception.JDSSRESTException(resp['error']['message'])
+                raise jexc.JDSSRESTException(reason=resp['error']['message'], request=req)
             else:
-                raise exception.JDSSRESTException('Something wrong')
+                raise jexc.JDSSRESTException(reason='Something wrong', request=req)
         return
 
-    def create_target_user(self, pool_name, target_name, chap_cred):
+    def create_target_user(self, target_name, chap_cred):
         """create_target_user.
 
         POST
-        pools<pool_name>/san/iscsi/targets/<target_name>/incoming-users
+        /san/iscsi/targets/<target_name>/incoming-users
 
-        :param pool_name:
         :param target_name:
         :param chap_cred:
         {
@@ -594,17 +562,11 @@ class JovianRESTAPI(object):
         }
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name + "/incoming-users"
-        req = self.url + path
+        req = '/san/iscsi/targets/' + target_name + "/incoming-users"
 
-        LOG.debug(
-            "JovianDSS: User {} Pwd {} for target {}.".format(
-                chap_cred["name"],
-                chap_cred["password"],
-                target_name))
+        LOG.debug("add credentails to target %s", target_name)
 
-        resp = self.rproxy.request('POST', req, json_data=chap_cred)
+        resp = self.rproxy.pool_request('POST', req, json_data=chap_cred)
 
         if resp["error"] is None and \
                 (resp["code"] == 200 or
@@ -614,27 +576,28 @@ class JovianRESTAPI(object):
 
         # TODO(andrei.perepiolkin@open-e.com): provide additional handling
         # of different error cases
+        msg='Failed to set target user {}.'.format(resp['error']['message'])
+        raise jexc.JDSSRESTException(reason=msg, request=req)
 
-        raise exception.JDSSRESTException(
-            'Failed to set target user {}.'.format(resp['error']['message']))
 
-    def is_target_lun(self, pool_name, target_name, lun_name):
+    def is_target_lun(self, target_name, lun_name):
         """is_target_lun.
 
-        GET pools/<pool_name>/san/iscsi/targets/<target_name>/luns/<lun_name>
+        GET /san/iscsi/targets/<target_name>/luns/<lun_name>
         :param pool_name:
         :param target_name:
         :param lun_name:
         :return: Bool
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
-        req = self.url + path
+        req = '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
 
-        LOG.debug("JovianDSS: check target lun [url]: {}".format(req))
-        resp = self.rproxy.request('GET', req)
-        LOG.debug(
-            "JovianDSS: Lun exists processing response: {}".format(resp))
+        LOG.debug("check if volume %(vol)s is associated with %(tar)s",
+            {'vol': lun_name,
+             'tar': target_name})
+        resp = self.rproxy.pool_request('GET', req)
+
+        if resp["code"] == 404:
+            return False
 
         if resp["error"] is not None:
             return False
@@ -650,27 +613,28 @@ class JovianRESTAPI(object):
 
         if resp["data"]["name"] != lun_name:
             return False
+        LOG.debug("volume %(vol)s is associated with %(tar)s",
+            {'vol': lun_name,
+             'tar': target_name})
 
         return True
 
-    def attach_target_vol(self, pool_name, target_name, lun_name):
+    def attach_target_vol(self, target_name, lun_name):
         """attach_target_vol.
 
-        POST pools/<pool_name>/san/iscsi/targets/<target_name>/luns
-        :param pool_name:
+        POST /san/iscsi/targets/<target_name>/luns
         :param target_name:
         :param lun_name:
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name + "/luns"
-        req = self.url + path
+        req = '/san/iscsi/targets/' + target_name + "/luns"
 
         jbody = {"name": lun_name}
-        LOG.debug("JovianDSS: Atach lun {} to target {}: {}".format(
-            lun_name, target_name, req))
+        LOG.debug("atach volume %(vol)s to target %(tar)",
+                {'vol': lun_name,
+                 'tar': target_name})
 
-        resp = self.rproxy.request('POST', req, json_data=jbody)
+        resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
         if resp["error"] is None and resp["code"] == 201:
             return
@@ -678,32 +642,28 @@ class JovianRESTAPI(object):
         # TODO(andrei.perepiolkin@open-e.com): provide additional handling
         # of different error cases
 
-        raise exception.JDSSRESTException(
+        raise jexc.JDSSRESTException(
             'Failed to attach volume {}.'.format(resp['error']['message']))
 
-    def detach_target_vol(self, pool_name, target_name, lun_name):
+    def detach_target_vol(self, target_name, lun_name):
         """detach_target_vol.
 
-        DELETE pools/<pool_name>/san/iscsi/targets/<target_name>/luns/
+        DELETE /san/iscsi/targets/<target_name>/luns/
         <lun_name>
-        :param pool_name:
         :param target_name:
         :param lun_name:
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
+        req = '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
 
-        req = self.url + path
-
-        if not self.is_target_lun(pool_name, target_name, lun_name):
+        if not self.is_target_lun(target_name, lun_name):
             return
 
-        LOG.debug(
-            "JovianDSS: Detach lun {} from target {} [url]: {}"
-            "".format(lun_name, target_name, req))
+        LOG.debug("detach volume %(vol) from target %(tar)",
+            {'vol': lun_name,
+             'tar': target_name})
 
-        resp = self.rproxy.request('DELETE', req)
+        resp = self.rproxy.pool_request('DELETE', req)
 
         if resp["code"] == 500 and \
                 resp["error"]["class"] == \
@@ -720,9 +680,9 @@ class JovianRESTAPI(object):
                 (resp["code"] == 204):
             return
 
-        raise exception.JDSSRESTException("Unable to detach lun.")
+        raise jexc.JDSSRESTException("unable to detach lun.")
 
-    def create_snapshot(self, pool_name, volume_name, snapshot_name):
+    def create_snapshot(self, volume_name, snapshot_name):
         """create_snapshot.
 
         POST /pools/<string:poolname>/volumes/<string:volumename>/snapshots
@@ -731,18 +691,15 @@ class JovianRESTAPI(object):
         :param snapshot_name: snapshot name
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name + '/snapshots'
-
-        req = self.url + path
+        req = '/volumes/' + volume_name + '/snapshots'
 
         jbody = {
             'snapshot_name': snapshot_name
         }
 
-        LOG.debug("JovianDSS: create snapshot [url]: %s" % req)
+        LOG.debug("create snapshot %s", snapshot_name)
 
-        resp = self.rproxy.request('POST', req, json_data=jbody)
+        resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
         if (resp["error"] is None) and (
                 (resp["code"] == 200) or
@@ -753,22 +710,20 @@ class JovianRESTAPI(object):
         # TODO(andrei.perepiolkin@open-e.com): provide additional handling of
         # different error cases
 
-        raise exception.JDSSRESTException(
+        raise jexc.JDSSRESTException(
             'Failed to create snapshot {}.'.format(resp['error']['message']))
 
-    def create_volume_from_snapshot(self, pool_name, volume_name,
-                                    snapshot_name, original_vol_name, **options):
+    def create_volume_from_snapshot(self, volume_name, snapshot_name,
+                                    original_vol_name, **options):
         """create_volume_from_snapshot.
 
-        POST /pools/<string:poolname>/volumes/<string:volumename>/clone
-        :param pool_name:
+        POST /volumes/<string:volumename>/clone
         :param volume_name: volume that is going to be created
         :param snapshot_name: slice of original volume
         :param original_vol_name: sample copy
         :return:
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + original_vol_name + '/clone'
+        req = '/volumes/' + original_vol_name + '/clone'
 
         jbody = {
             'name': volume_name,
@@ -779,12 +734,11 @@ class JovianRESTAPI(object):
         if 'sparse' in options:
             jbody['sparse'] = options['sparse']
 
-        req = self.url + path
+        LOG.debug("create volume %(vol)s from snapshot %(snap)s",
+                {'vol': volume_name,
+                 'snap': snapshot_name})
 
-        LOG.debug("JovianDSS: create volume from snapshot: {}"
-                  "".format(req))
-
-        resp = self.rproxy.request('POST', req, json_data=jbody)
+        resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
         if resp["error"] is None and (
                 (resp["code"] == 200) or
@@ -792,29 +746,26 @@ class JovianRESTAPI(object):
                 (resp["code"] == 204)):
             return
 
-        raise exception.JDSSRESTException('unable to create volume')
+        raise jexc.JDSSRESTException('unable to create volume')
 
     # TODO(andrei.perepiolkin@open-e.com): implement this
-    def is_snapshot(self, pool_name, volume_name, snapshot_name):
+    def is_snapshot(self, volume_name, snapshot_name):
         """is_snapshots.
 
         GET
-        /pools/<string:poolname>/volumes/<string:volumename>/
-            snapshots/<string:snapshotname>/clones
+        /volumes/<string:volumename>/snapshots/<string:snapshotname>/clones
 
-        :param pool_name:
         :param volume_name: that snapshot belongs to
         :return: bool
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name + '/snapshots/' + snapshot_name + \
+        req = '/volumes/' + volume_name + '/snapshots/' + snapshot_name + \
             '/clones'
 
-        req = self.url + path
-        LOG.debug(
-            "JovianDSS: Get snapshot properties [url]: {}".format(req))
+        LOG.debug("check if snapshot %(snap)s of volume %(vol)s exists",
+                {'snap': snapshot_name,
+                 'vol': volume_name})
 
-        resp = self.rproxy.request('GET', req)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp["error"] is None and resp["code"] == 200:
             return True
@@ -822,7 +773,6 @@ class JovianRESTAPI(object):
         return False
 
     def delete_snapshot(self,
-                        pool_name,
                         volume_name,
                         snapshot_name,
                         recursively_children=False,
@@ -830,9 +780,8 @@ class JovianRESTAPI(object):
                         force_umount=False):
         """delete_snapshot.
 
-        DELETE /pools/<string:poolname>/volumes/<string:volumename>/snapshots/
+        DELETE /volumes/<string:volumename>/snapshots/
             <string:snapshotname>
-        :param pool_name:
         :param volume_name: volume that snapshot belongs to
         :param snapshot_name: snapshot name
         :param recursively_children: boolean indicating if zfs should
@@ -845,14 +794,14 @@ class JovianRESTAPI(object):
             umount (defualt false).
         :return:
         """
-        if not self.is_snapshot(pool_name, volume_name, snapshot_name):
+        if not self.is_snapshot(volume_name, snapshot_name):
             return
 
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name + '/snapshots/' + snapshot_name
+        req = '/volumes/' + volume_name + '/snapshots/' + snapshot_name
 
-        req = self.url + path
-        LOG.debug("JovianDSS: delete snapshot [url]: %s".format(req))
+        LOG.debug("delete snapshot %(snap)s of volume %(vol)s",
+                {'snap': snapshot_name,
+                 'vol': volume_name})
 
         jbody = {}
         if recursively_children is True:
@@ -866,27 +815,25 @@ class JovianRESTAPI(object):
 
         resp = dict()
         if len(jbody) > 0:
-            resp = self.rproxy.request('DELETE', req, json_data=jbody)
+            resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
         else:
-            resp = self.rproxy.request('DELETE', req)
+            resp = self.rproxy.pool_request('DELETE', req)
 
         if ((resp["code"] == 200) or
                 (resp["code"] == 201) or
                 (resp["code"] == 204)):
-            LOG.debug(
-                "JovianDSS: Snapshot DELETE SUCCESS exiting. {}".format(req))
+            LOG.debug("snapshot %s deleted", snapshot_name)
             return
         # TODO(andrei.perepiolkin@open-e.com): analise error
-        raise exception.JDSSRESTException('Unable to delete snapshot')
+        raise exception.SnapshotIsBusy(snapshot_name=snapshot_name)
 
-    def get_snapshots(self, pool_name, volume_name):
+    def get_snapshots(self, volume_name):
         """get_snapshots.
 
         GET
-        /pools/<string:poolname>/volumes/<string:volumename>/
+        /volumes/<string:volumename>/
             snapshots
 
-        :param pool_name:
         :param volume_name: that snapshot belongs to
         :return:
         {
@@ -912,21 +859,18 @@ class JovianRESTAPI(object):
             "error": null
         }
         """
-        path = self.api_path + '/pools/' + pool_name + \
-            '/volumes/' + volume_name + '/snapshots'
+        req = '/volumes/' + volume_name + '/snapshots'
 
-        req = self.url + path
-        LOG.debug(
-            "JovianDSS: Get snapshot properties [url]: {}".format(req))
+        LOG.debug("get snapshot %s properties", snapshot_name)
 
-        resp = self.rproxy.request('GET', req)
+        resp = self.rproxy.pool_request('GET', req)
 
         if resp["error"] is None and resp["code"] == 200:
             return resp["data"]
 
-        raise exception.JDSSRESTException('unable to get snapshot')
+        raise jexc.JDSSRESTException('unable to get snapshot')
 
-    def get_pool_stats(self, pool_name):
+    def get_pool_stats(self):
         """get_pool_stats.
 
         GET /pools/<string:poolname>
@@ -989,12 +933,11 @@ class JovianRESTAPI(object):
           "error": null
         }
         """
-        path = self.api_path + '/pools/' + pool_name
-        req = self.url + path
-        LOG.debug("JovianDSS: get pool fsprops [url]: {}".format(req))
+        req = ""
+        LOG.debug("Get pool %s fsprops", self.pool)
 
-        resp = self.rproxy.request('GET', req)
+        resp = self.rproxy.pool_request('GET', req)
         if resp["error"] is None and resp["code"] == 200:
             return resp["data"]
 
-        raise exception.JDSSRESTException('Unable to get pool info')
+        raise jexc.JDSSRESTException('Unable to get pool info')

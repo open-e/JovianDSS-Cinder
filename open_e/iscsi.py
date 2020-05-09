@@ -23,11 +23,11 @@ import string
 from cinder import exception
 from cinder.i18n import _
 from cinder.volume import driver
+from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 from cinder.volume.drivers.open_e.jovian_common import jdss_common as jcom
 from cinder.volume.drivers.open_e.jovian_common import rest
 from cinder.volume.drivers.open_e import options
 from oslo_log import log as logging
-from oslo_utils import netutils as o_netutils
 from oslo_utils import units as o_units
 
 
@@ -35,7 +35,16 @@ LOG = logging.getLogger(__name__)
 
 
 class JovianISCSIDriver(driver.ISCSIDriver):
-    """Executes volume driver commands on Open-E JovianDSS V7."""
+    """Executes volume driver commands on Open-E JovianDSS V7.
+
+    Version history:
+
+    .. code-block:: none
+
+        1.0.0 - Initial base driver
+        1.0.1
+        1.0.2 - Provide support for HA claster and virtual IP
+    """
 
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "Open-E_JovianDSS_CI"
@@ -49,7 +58,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         self.ra = None
         self.conf = dict()
 
-        LOG.debug('JovianDSS: Enter JovianISCSIDriver')
+        LOG.debug('Enter JovianISCSIDriver')
         self.configuration.append_config_values(
             options.jdss_connection_opts)
         self.configuration.append_config_values(
@@ -71,75 +80,31 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
     def do_setup(self, context):
         """Any initialization the volume driver does while starting."""
+        self.pool = self.configuration.safe_get('jovian_pool')
         self.jovian_iscsi_target_portal_port = str(
             self.configuration.safe_get('jovian_iscsi_target_portal_port'))
-        self.conf['jovian_iscsi_target_portal_port'] = \
-            self.jovian_iscsi_target_portal_port
-
-        self.pool = self.configuration.safe_get('jovian_pool')
-        self.conf['jovian_pool'] = self.pool
 
         self.jovian_target_prefix = self.configuration.safe_get(
             'jovian_target_prefix')
-        self.conf['jovian_target_prefix'] = self.jovian_target_prefix
 
         self.jovian_target_group_prefix = self.configuration.safe_get(
             'jovian_target_group_prefix')
-        self.conf['jovian_target_group_prefix'] = (
-            self.jovian_target_group_prefix)
 
         self.jovian_chap_auth = self.configuration.safe_get('jovian_chap_auth')
-        self.conf['jovian_chap_auth'] = self.jovian_chap_auth
-
-        self.jovian_host = self.configuration.safe_get('jovian_host')
-        self.conf['jovian_host'] = self.jovian_host
-
-        self.conf['jovian_rest_port'] = self.configuration.safe_get(
-            'jovian_rest_port')
-        self.conf['jovian_rest_protocol'] = self.configuration.safe_get(
-            'jovian_rest_protocol')
-        self.conf['jovian_rest_send_repeats'] = self.configuration.safe_get(
-            'jovian_rest_send_repeats')
-        self.conf['jovian_user'] = self.configuration.safe_get(
-            'jovian_user')
-        self.conf['jovian_password'] = self.configuration.safe_get(
-            'jovian_password')
-        self.conf['jovian_ignore_tpath'] = self.configuration.safe_get(
-            'jovian_ignore_tpath')
-
-        for i in self.conf['jovian_ignore_tpath']:
-            LOG.debug(i)
-
         self.jovian_chap_username = \
             self.configuration.safe_get('jovian_chap_username')
-        self.conf['jovian_chap_username'] = self.configuration.safe_get(
-            'jovian_chap_username')
-
         self.jovian_chap_pass_len = self.configuration.safe_get(
             'jovian_chap_pass_len')
-        self.conf['jovian_chap_pass_len'] = self.jovian_chap_pass_len
-
-        self.jovian_password_len = \
-            self.configuration.safe_get('jovian_chap_pass_len')
-
         self.jovian_sparse = \
             self.configuration.safe_get('jovian_provisioning_thin')
+        self.jovian_ignore_tpath = self.configuration.get(
+            'jovian_ignore_tpath', None)
 
-        if o_netutils.is_valid_ip(self.jovian_host) is False:
-            err_msg = ('JovianDSS: Invalid value of jovian_host property:'
-                       '%(addr)s, IP address expected.' %
-                       {'addr': self.jovian_host})
-
-            LOG.debug(err_msg)
-            raise exception.InvalidConfigurationValue(err_msg)
-
-        self.ra = rest.JovianRESTAPI(self.conf)
-
-        pass
+        self.ra = rest.JovianRESTAPI(self.configuration)
 
     def check_for_setup_error(self):
         """Verify that the pool exists."""
-        if not self.ra.is_pool_exists(self.pool):
+        if not self.ra.is_pool_exists():
             LOG.error("Setup is incorrect, please check connection settings.")
             raise exception.VolumeDriverException("Bad configuration expected")
     # TODO(andrei.perepiolkin@open-e.com): Provide additional checks
@@ -160,36 +125,42 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     def _get_active_ifaces(self):
         iface_info = self.ra.get_iface_info()
         if iface_info is None:
-            LOG.debug('JovianDSS: Unable to get net interface info')
+            LOG.debug('Unable to get net interface info')
 
             raise exception.VolumeBackendAPIException(
-                'JovianDSS: Unable to get net interface info')
+                'Unable to get net interface info')
 
         out = list()
         for iface in iface_info:
-
-            if not iface['address']:
-                continue
-
+            up = True
             if 'is_up' in iface:
-                if not iface['is_up']:
-                    continue
+                up = up and iface['is_up']
+            else:
+                up = False
 
             if 'operational_state' in iface:
-                if iface['operational_state'] != 'up':
-                    continue
+                up = up and (iface['operational_state'] == 'up')
+            else:
+                up = False
 
             if 'status' in iface:
-                if iface['status'] != 'connected':
-                    continue
+                up = up and (iface['status'] == 'connected')
+            else:
+                up = False
 
-            if self.conf['jovian_ignore_tpath']:
-                if iface['address'] in self.conf['jovian_ignore_tpath']:
-                    continue
+            if 'type' in iface:
+                up = up and (iface['type'] == 'interface')
+            else:
+                up = False
 
-            out.append(iface['address'])
-
-        LOG.debug('JovianDSS: interfaces found %s', str(out))
+            if up is False:
+                continue
+            if not self.jovian_ignore_tpath:
+                out.append(iface['address'])
+                continue
+            if iface['address'] not in self.jovian_ignore_tpath:
+                out.append(iface['address'])
+        LOG.debug('interfaces found %s', str(out))
         return out
 
     def create_volume(self, volume):
@@ -199,22 +170,21 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :return: model update dict for volume reference
         """
         vname = volume['id']
-        LOG.debug('JovianDSS: Creating volume %s.', volume['id'])
+        LOG.debug('creating volume %s.', volume['id'])
 
         provider_location = self._get_provider_location(vname)
         provider_auth = self._get_provider_auth()
 
         try:
-            self.ra.create_lun(self.pool,
-                               vname,
+            self.ra.create_lun(vname,
                                volume['size'] * o_units.Gi,
                                sparse=self.jovian_sparse)
 
-        except exception.JDSSRESTException as ex:
+        except jexc.JDSSRESTException as ex:
             LOG.error("Create volume error. Because %(err).",
                       {"err": ex.message})
             raise exception.VolumeBackendAPIException(
-                message=('JovianDSS: Failed to create volume %s.',
+                message=('Failed to create volume %s.',
                          volume['id']))
         ret = {}
         if provider_auth is not None:
@@ -224,17 +194,19 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         return ret
 
-    def delete_volume(self, volume):
+    def delete_volume(self, volume, cascade=False):
         """Destroy a volume.
 
         :param volume: volume reference
         """
         volume_name = volume['id']
 
+        LOG.debug('deleating volume %s.', volume_name)
+
         volume_info = {}
         try:
-            volume_info = self.ra.get_lun(self.pool, volume_name)
-        except exception.JDSSException as err:
+            volume_info = self.ra.get_lun(volume_name)
+        except jexc.JDSSException as err:
             if 'unable to get volume' in err.args[0]:
                 LOG.debug('Volume %s does not exist, it seems it was already '
                           'deleted.', volume_name)
@@ -244,16 +216,16 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         # VolumeIsBusy, VolumeDriverException and VolumeBackendAPIException
 
         try:
-            self.ra.delete_lun(self.pool, volume_name)
-        except exception.JDSSRESTException as err:
+            self.ra.delete_lun(volume_name, recursively_children=cascade)
+        except jexc.JDSSRESTException as err:
             if "volume is busy" == err.args[0]:
-                LOG.error('Failed to delete volume %(id)', {"id":volume['id']})
+                LOG.error('Failed to delete volume %(id)', {"id":volume_name})
                 raise exception.VolumeIsBusy(
-                    data=('Failed to delete volume %s', volume['id']))
+                    data=('Failed to delete volume %s', volume_name))
             raise exception.VolumeBackendAPIException(
                 "Fail during volume deletion.")
 
-        LOG.debug("JovianDSS: volume info is %s.", volume_info)
+        LOG.debug("volume info is %s.", volume_info)
 
         if 'origin' in volume_info and 'replication_driver_data' in volume:
 
@@ -263,10 +235,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 rdd_data = volume['replication_driver_data']
 
                 rdd_snapshots = self.re_tmp_snapshot.match(rdd_data).group(1)
-                origin_volume = jcom.origin_volume(self.pool,
-                                                   volume_info["origin"])
+                origin_volume = jcom.origin_volume(volume_info["origin"])
                 origin_snapshot = jcom.origin_snapshot(volume_info["origin"])
-                LOG.debug("JovianDSS: Original vol %(orig_vol)s"
+                LOG.debug("Original vol %(orig_vol)s"
                           "original snap %(orig_snap)s "
                           "replication_driver_data %(rdd)s", {
                               "orig_vol": jcom.origin_volume(
@@ -277,13 +248,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
                 if origin_snapshot == rdd_snapshots:
                     try:
-
                         self.ra.delete_snapshot(
                             self.pool,
                             origin_volume,
                             origin_snapshot)
 
-                    except exception.JDSSRESTException as err:
+                    except jexc.JDSSRESTException as err:
                         LOG.debug(
                             "Unable to delete temporal snapshot %(snapshot)s"
                             " of volume %(volume) with error %(err).", {
@@ -300,13 +270,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param volume: volume reference
         :param new_size: volume new size in GB
         """
-        LOG.debug("JovianDSS: Extend volume %s", volume['id'])
+        LOG.debug("Extend volume %s", volume['id'])
 
         try:
-            self.ra.extend_lun(self.pool,
-                               volume['id'],
+            self.ra.extend_lun(volume['id'],
                                new_size * o_units.Gi)
-        except exception.JDSSException:
+        except jexc.JDSSException:
             raise exception.VolumeBackendAPIException(
                 message=('Failed to extend volume %s.', volume['id']))
 
@@ -320,19 +289,18 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         src_vref_name = src_vref['id']
         tmp_snapshot_name = "tmp_snapshot_for_volume_" + volume_name
 
-        LOG.debug('JovianDSS: create cloned volume %(id)s'
+        LOG.debug('create cloned volume %(id)s'
                   'from volume %(id_from)s by tmp snapshot %(snapshot)s.', {
                       "id": volume['id'],
                       "id_from": src_vref_name,
                       "snapshot": tmp_snapshot_name})
 
         try:
-            self.ra.create_snapshot(self.pool, src_vref_name,
-                                    tmp_snapshot_name)
+            self.ra.create_snapshot(src_vref_name, tmp_snapshot_name)
 
-        except exception.JDSSException:
+        except jexc.JDSSException:
 
-            LOG.debug('JovianDSS: Failed to create tmp snapshot %(snapshot)s'
+            LOG.debug('Failed to create tmp snapshot %(snapshot)s'
                       'for volume %(volume)s.', {
                           'snapshot': tmp_snapshot_name,
                           'volume': tmp_snapshot_name})
@@ -345,13 +313,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         try:
             self.ra.create_volume_from_snapshot(
-                self.pool,
                 volume_name,
                 tmp_snapshot_name,
                 src_vref_name,
                 sparse=self.jovian_sparse)
 
-        except exception.JDSSException as err:
+        except jexc.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
                 LOG.error('Failed to create volume %(vname).', {'vname':volume_name})
                 raise exception.VolumeBackendAPIException(
@@ -374,22 +341,21 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         and setup replication between the newly created volume and
         the secondary volume.
         """
-        LOG.debug('JovianDSS: create volume %(vol)s from snapshot %(snap)s', {
+        LOG.debug('create volume %(vol)s from snapshot %(snap)s', {
             'vol': volume['id'],
             'snap': snapshot['name']})
 
         try:
             self.ra.create_volume_from_snapshot(
-                self.pool,
                 volume['id'],
                 snapshot['id'],
                 snapshot['volume_id'],
                 sparse=self.jovian_sparse)
 
-        except exception.JDSSException as err:
+        except jexc.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
 
-                LOG.debug('JovianDSS: Failed to create volume %(vol)'
+                LOG.debug('Failed to create volume %(vol)'
                           'from snapshot %(snap)', {
                               'vol': volume['id'],
                               'snap': snapshot['id']})
@@ -407,18 +373,17 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         :param snapshot: snapshot reference
         """
-        LOG.debug('JovianDSS: create snapshot %(snap) for volume %(vol)', {
+        LOG.debug('create snapshot %(snap)s for volume %(vol)s', {
             'snap': snapshot['id'],
             'vol': snapshot['volume_id']})
 
         try:
             self.ra.create_snapshot(
-                self.pool,
                 snapshot['volume_id'],
                 snapshot['id'])
 
-        except exception.JDSSRESTException as err:
-            LOG.error(('JovianDSS: Failed to create snapshot %(snap)'
+        except jexc.JDSSRESTException as err:
+            LOG.error(('Failed to create snapshot %(snap)'
                        'for volume %(vol) %(msg).') % {
                            'snap': snapshot['id'],
                            'vol': snapshot['volume_id'],
@@ -433,11 +398,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         """
         try:
             self.ra.delete_snapshot(
-                self.pool,
                 snapshot['volume_id'],
                 snapshot['id'])
 
-        except exception.JDSSRESTException as err:
+        except exception.SnapshotIsBusy:
+            raise
+        except jexc.JDSSRESTException as err:
 
             msg = _('Failed to delete snapshot %(snap) for volume %(vol)'
                     'because of %(err).') % {
@@ -466,7 +432,10 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         if not self.jovian_chap_auth:
             return None
 
-        field = string.lowercase + string.uppercase + string.digits
+        field = "abcdefghijklmnopqrstuvwxyz"
+        field += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        field += "0123456789"
+
         chap_password = ''.join(random.sample(field,
                                               int(self.jovian_chap_pass_len)))
 
@@ -482,7 +451,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     def _get_provider_location(self, volume_name):
         """Return volume iscsiadm-formatted provider location string."""
         return '%(host)s:%(port)s,1 %(name)s 0' % {
-            'host': self.jovian_host,
+            'host': self.ra.get_active_host(),
             'port': self.jovian_iscsi_target_portal_port,
             'name': self._get_target_name(volume_name)
         }
@@ -493,7 +462,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param volume: reference of volume to be exported
         :return: iscsiadm-formatted provider location string
         """
-        LOG.debug("JovianDSS: create_export for volume: %s.", volume["id"])
+        LOG.debug("create_export for volume: %s.", volume["id"])
 
         self._prepare_target_volume(volume, connector)
 
@@ -504,7 +473,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         :param volume: reference of volume to be exported
         """
-        LOG.debug("JovianDSS: ensure_export for volume: %s.", volume['id'])
+        LOG.debug("ensure_export for volume: %s.", volume['id'])
         self._prepare_target_volume(volume, None)
 
         return {'provider_location': self._get_provider_location(volume)}
@@ -514,7 +483,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         :param volume: reference of volume to be unexported
         """
-        LOG.debug("JovianDSS: remove_export for volume: %s.", volume['id'])
+        LOG.debug("remove_export for volume: %s.", volume['id'])
 
         self._remove_target_volume(volume)
 
@@ -535,7 +504,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         LOG.debug('Updating volume stats')
         self._stats = None
 
-        pool_stats = self.ra.get_pool_stats(self.pool)
+        pool_stats = self.ra.get_pool_stats()
         total_capacity = math.floor(int(pool_stats["size"]) / o_units.Gi)
         free_capacity = math.floor(int(pool_stats["available"]) / o_units.Gi)
 
@@ -549,7 +518,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         location_info = '%(driver)s:%(host)s:%(volume)s' % {
             'driver': self.__class__.__name__,
-            'host': self.jovian_host,
+            'host': self.ra.get_active_host(),
             'volume': self.pool
         }
 
@@ -565,7 +534,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             'location_info': location_info
         }
 
-        LOG.debug('JovianDSS: Total capacity: %d,'
+        LOG.debug('Total capacity: %d,'
                   'Free %d.',
                   self._stats['total_capacity_gb'],
                   self._stats['free_capacity_gb'])
@@ -576,7 +545,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param volume_id:
         :return:
         """
-        return self.ra.is_lun(self.pool, volume_id)
+        return self.ra.is_lun(volume_id)
 
     def _create_new_target_volume(self, volume, target_name, connector=None):
         """_create_new_target_volume.
@@ -589,7 +558,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param connector: connector description
         :return:
         """
-        LOG.debug("JovianDSS: Create new target volume.")
+        LOG.debug("Create new target volume.")
 
         auth = volume['provider_auth']
 
@@ -605,14 +574,13 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         # Deny all connections by default
         deny_ip_list = []
         try:
-            self.ra.create_target(self.pool,
-                                  target_name,
+            self.ra.create_target(target_name,
                                   use_chap=use_chap,
                                   deny_ip=deny_ip_list)
 
-        except exception.JDSSRESTException as ex:
+        except jexc.JDSSRESTException as ex:
 
-            err_msg = ('JovianDSS: Unable to create target %(target)s '
+            err_msg = ('Unable to create target %(target)s '
                        'because of %(error)s.' %
                        {'target': target_name, 'error': ex.message})
 
@@ -623,12 +591,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         if use_chap:
 
             try:
-                self.ra.create_target_user(self.pool, target_name,
+                self.ra.create_target_user(target_name,
                                            chap_cred)
 
-            except exception.JDSSRESTException as ex:
+            except jexc.JDSSRESTException as ex:
 
-                err_msg = (_('JovianDSS: Unable to create'
+                err_msg = (_('Unable to create'
                              ' user %(user)s for target %(target)s'
                              ' because of %(error)s.') %
                            {
@@ -642,13 +610,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         try:
             self.ra.attach_target_vol(
-                self.pool,
                 target_name,
                 volume["id"])
 
-        except exception.JDSSRESTException as ex:
+        except jexc.JDSSRESTException as ex:
 
-                err_msg = ('JovianDSS: Unable to attach'
+                err_msg = ('Unable to attach'
                            'target %(target)s to'
                            'volume %(volume)s '
                            'because of %(error)s.' %
@@ -669,20 +636,18 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param connector:
         :return:
         """
-        LOG.debug("JovianDSS: Prepare target volume %s.", volume['id'])
+        LOG.debug("Prepare target volume %s.", volume['id'])
 
         target_name = self.jovian_target_prefix + volume["id"]
 
-        if self.ra.is_target(self.pool, target_name) is True:
-            LOG.debug("JovianDSS: Target %s exists.", target_name)
-            if self.ra.is_target_lun(self.pool,
-                                     target_name,
+        if self.ra.is_target(target_name) is True:
+            LOG.debug("Target %s exists.", target_name)
+            if self.ra.is_target_lun(target_name,
                                      volume["id"])\
                     is True:
                 return
             else:
                 if self.ra.attach_target_vol(
-                        self.pool,
                         target_name,
                         volume["id"]) is False:
 
@@ -708,36 +673,34 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :return:
         """
         target_name = self.jovian_target_prefix + volume['id']
-        LOG.debug("JovianDSS: Remove_export.")
-        LOG.debug("JovianDSS: detach volume:%(vol)s from target:%(targ)s.", {
+        LOG.debug("Remove_export.")
+        LOG.debug("detach volume:%(vol)s from target:%(targ)s.", {
             'vol': volume,
             'targ': target_name})
 
         try:
-            self.ra.detach_target_vol(self.pool,
-                                      target_name,
-                                      volume['id'])
-        except exception.JDSSRESTException as ex:
+            self.ra.detach_target_vol(target_name, volume['id'])
+        except jexc.JDSSRESTException as ex:
             LOG.debug('Failed to Terminate_connection for target %(targ)s'
                       'because of: %(err)s', {
                           'targ': target_name,
                           'err': str(ex.args[0])})
-        except exception.JDSSRESTResourceNotFoundException as ex:
+        except jexc.JDSSRESTResourceNotFoundException as ex:
             LOG.debug('Failed to remove resource %(targ) because of %(err).', {
                 'targ': target_name,
                 'err': str(ex.args[0])})
 
-        LOG.debug("JovianDSS: Delete target: %s.", target_name)
+        LOG.debug("Delete target: %s.", target_name)
 
         try:
-            self.ra.delete_target(self.pool, target_name)
-        except exception.JDSSRESTException as ex:
+            self.ra.delete_target(target_name)
+        except jexc.JDSSRESTException as ex:
             LOG.debug('Failed to Terminate_connection for target %(targ)s'
                       'because of: %(err)s', {
                           'targ': target_name,
                           'err': str(ex.args[0])})
 
-        except exception.JDSSRESTResourceNotFoundException as ex:
+        except jexc.JDSSRESTResourceNotFoundException as ex:
             LOG.debug('Failed to remove resource %(targ) because of %(err).', {
                 'targ': target_name,
                 'err': str(ex.args[0])})
@@ -751,13 +714,13 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         """
         vname = volume["id"]
 
-        zvol_info = self.ra.get_zvol_info(self.pool, vname)
+        zvol_info = self.ra.get_zvol_info(vname)
         if zvol_info is None:
-            LOG.debug('JovianDSS: Unable to get zvol lun for'
+            LOG.debug('Unable to get zvol lun for'
                       ' volume %s.', vname)
 
             raise exception.VolumeBackendAPIException(
-                'JovianDSS: Unable to get'
+                'Unable to get'
                 ' zvolume lun for volume %s.', vname)
 
         iface_info = []
@@ -766,7 +729,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             iface_info = self._get_active_ifaces()
             if not iface_info:
                 raise exception.InvalidConfigurationValue(
-                    'JovianDSS: No available interfaces '
+                    'No available interfaces '
                     'or config excludes them')
 
         iscsi_properties = dict()
@@ -775,7 +738,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             iscsi_properties['target_iqns'] = []
             iscsi_properties['target_portals'] = []
             iscsi_properties['target_luns'] = []
-            LOG.debug('JovianDSS: tpaths %s.', str(iface_info))
+            LOG.debug('tpaths %s.', str(iface_info))
             for iface in iface_info:
                 iscsi_properties['target_iqns'].append(
                     self.jovian_target_prefix +
@@ -788,7 +751,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         else:
             iscsi_properties['target_iqn'] = self.jovian_target_prefix + vname
             iscsi_properties['target_portal'] = \
-                self.jovian_host + ":" + self.jovian_iscsi_target_portal_port
+                self.ra.get_active_host() + ":" + self.jovian_iscsi_target_portal_port
 
         iscsi_properties['target_discovered'] = False
 
@@ -824,7 +787,19 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         target_name = self.jovian_target_prefix + volume["id"]
 
-        LOG.debug("JovianDSS: "
+        ip_settings = self.ra.get_target_ip_settings(target_name)
+
+        LOG.debug("initialize_connection for %(volume)s %(ip)s."
+                  "with ip list %(ip_list)s." %
+                  {'volume': volume['id'],
+                   'ip': connector['ip'],
+                   'ip_list': str(ip_settings['allow_ip'])})
+
+        if connector['ip'] not in ip_settings['allow_ip']:
+            ip_settings['allow_ip'].append(connector['ip'])
+            self.ra.set_target_ip_settings(target_name, ip_settings)
+
+        LOG.debug(""
                   "providing connection info %s", str(iscsi_properties))
         return {
             'driver_volume_type': 'iscsi',
@@ -838,6 +813,23 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         from allowed ip list.
         """
 
+        target_name = self.jovian_target_prefix + volume["id"]
+
+        if not self.ra.is_target(target_name):
+            return
+
+        ip_settings = self.ra.get_target_ip_settings(target_name)
+
+        if connector['ip'] in ip_settings['allow_ip']:
+            ip_settings['allow_ip'].remove(connector['ip'])
+
+            LOG.debug("terminate_connection for %(volume)s %(ip)s."
+                      "from ip list %(ip_list)s." %
+                      {'volume': volume['id'],
+                       'ip': connector['ip'],
+                       'ip_list': str(ip_settings['allow_ip'])})
+
+            self.ra.set_target_ip_settings(target_name, ip_settings)
         return
 
     def attach_volume(self,
@@ -847,7 +839,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                       host_name,
                       mount_point):
         """Callback for volume attached to instance or host."""
-        LOG.debug("JovianDSS: Attach volume:"
+        LOG.debug("Attach volume:"
                   " context: %(context)s,"
                   " volume: %(volume)s,"
                   " instance_uuid: %(uuid)s,"
@@ -864,7 +856,4 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                       volume,
                       attachment=None):
         """Callback for volume detached."""
-        LOG.debug("JovianDSS: Detach volume:"
-                  " context: %(context), volume: %(vol).", {
-                      'context': context,
-                      'vol': volume})
+        LOG.debug("Detach volume: %s.", volume)

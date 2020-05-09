@@ -16,7 +16,7 @@
 from oslo_config import cfg
 
 jdss_connection_opts = [
-    cfg.StrOpt('jovian_host',
+    cfg.ListOpt('jovian_hosts',
                default='',
                help='IP address of Open-E JovianDSS SA'),
     cfg.IntOpt('jovian_rest_port',
@@ -29,6 +29,9 @@ jdss_connection_opts = [
     cfg.StrOpt('jovian_rest_send_repeats',
                default=3,
                help='Number of retries to send REST request.'),
+    cfg.IntOpt('jovian_recovery_delay',
+               default=60,
+               help='Time before HA cluster failure.'),
     cfg.StrOpt('jovian_user',
                default='admin',
                help='User name to connect to Open-E JovianDSS SA'),
@@ -38,7 +41,7 @@ jdss_connection_opts = [
                secret=True),
     cfg.ListOpt('jovian_ignore_tpath',
                 default=[],
-                help='List of multipath ip addresses to ignore.')
+                help='List of multipath ip addresses to ignore.'),
 ]
 
 jdss_iscsi_opts = [
