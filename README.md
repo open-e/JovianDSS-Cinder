@@ -203,7 +203,35 @@ jovian_recovery_delay = 60
 jovian_provisioning_thin = True
 
 ```
-Do not forget to cahnge values of `jovian_pool` and `volume_backend_name `. Everything else remain the same.
+Do not forget to change values of `jovian_pool` and `volume_backend_name `. Everything else remain the same.
+
+### HA Cluster
+
+To utilise Hight Availability feature of of JovianDSS:
+1. [Configure Pool to high availabilyt cluster](https://www.youtube.com/watch?v=juWIQT_bAfM)
+2. Set `jovian_hosts` with list of `virtual IPs` associated with this Pool
+
+For instance if you have `Pool-2` with 2 virtual IPs 192.168.21.100 and 192.168.31.100 the configuration file will look like:
+```
+[jdss-2]
+volume_driver = cinder.volume.drivers.open_e.iscsi.JovianISCSIDriver
+volume_backend_name = jdss-2
+jovian_rest_protocol = https
+jovian_hosts = 192.168.21.100,192.168.31.100
+jovian_rest_port = 82
+jovian_user = admin
+jovian_password = admin
+jovian_iscsi_target_portal_port = 3260
+jovian_target_prefix = iqn.2016-04.com.open-e.cinder: 
+jovian_pool = Pool-2
+jovian_chap_auth = True
+jovian_chap_pass_len = 14
+jovian_chap_username = user
+jovian_rest_send_repeats = 4
+jovian_recovery_delay = 60
+jovian_provisioning_thin = True
+
+```
 
 ## License
 
