@@ -13,41 +13,13 @@ This repository contains source files for the JovianDSS Cinder volume driver.
 git clone https://github.com/Open-E/JovianDSS.git
 ```
 
-Copy __*joviandss*__ folder to your Cinder driver folder.
+Copy __*open_e*__ folder to your Cinder driver folder.
 For instance if your Cinder is located at __*/opt/stack/cinder/*__, the command will looks like:
 
 ```bash
 cp -R JovianDSS-Cinder/joviandss /opt/stack/cinder/cinder/volume/drivers/
 ```
 
-Add exception handlers by executing:
-
-```bash
-cat <<EOT >> /opt/stack/cinder/cinder/exception.py
-
-
-class JDSSException(VolumeDriverException):
-    message = _("JovianDSS driver faced an error: %(reason)s.")
-
-
-class JDSSRESTException(JDSSException):
-    message = _(""
-                "JovianDSS REST request %(request) faild because: "
-                "%(reason)s.")
-
-
-class JDSSRESTProxyException(JDSSException):
-    message = _(""
-                "JovianDSS connection with %(host) failed because: "
-                "%(reason)s.")
-
-
-class JDSSRESTResourceNotFoundException(JDSSException):
-    message = _("JovianDSS unable to found resource %(message)s.")
-
-EOT
-
-```
 
 ### Configuring
 
@@ -59,24 +31,25 @@ Add the field enabled\_backends with value joviandss:
 ```
 enabled_backends = joviandss
 ```
-Provide settings to JovianDSS driver by adding 'joviandss' description:
+Provide settings to JovianDSS driver by adding 'jdss-0' description:
 
 ```
-[joviandss]
+[jdss-0]
 volume_driver = cinder.volume.drivers.open_e.iscsi.JovianISCSIDriver
-volume_backend_name = joviandss
+volume_backend_name = jdss-0
 jovian_rest_protocol = https
-jovian_host = 192.168.10.102
+jovian_hosts = 192.168.10.102
 jovian_rest_port = 82
 jovian_user = admin
 jovian_password = admin
 jovian_iscsi_target_portal_port = 3260
 jovian_target_prefix = iqn.2016-04.com.open-e.cinder: 
-jovian_pool = Cinder
+jovian_pool = Pool-0
 jovian_chap_auth = True
 jovian_chap_pass_len = 14
 jovian_chap_username = user
 jovian_rest_send_repeats = 4
+jovian_recovery_delay = 60
 jovian_provisioning_thin = True
 ```
 	
@@ -92,11 +65,12 @@ jovian_provisioning_thin = True
 | jovian\_password   | admin            | Must be set according to the settings in [1] |
 | jovian\_iscsi\_target\_portal\_port | 3260 | Port for iSCSI connection               |
 | jovian\_target\_prefix | iqn.2016-04.com.open-e:01:cinder- | Prefix that will be used to form target name for volume |
-| jovian\_pool | Cinder-Pool-0 | Pool name that is going to be used to store volumes. Must be created in [2] |
+| jovian\_pool | Pool-0 | Pool name that is going to be used to store volumes. Must be created in [2] |
 | jovian\_chap\_auth | True | Enable/Disable CHAP authentication as required to connect newly created volumes, write "False" to disable |
 | jovian\_chap\_pass\_len | 12 | Specify length of the CHAP password --- each volume will get unique randomly generated password |
 | jovian\_chap\_username | admin | Default user name for the CHAP authentication to the specific volume |
-| jovian\_rest\_send\_repeats | 3 | Number of times that CinderDriver will provide to send REST request. |
+| jovian\_rest\_send\_repeats | 3 | Number of times that CinderDriver will provide to send REST request |
+| jovian\_recovery\_delay | 40 | Number of seconds to wait before resending request to the same host after failure |
 | jovian\_provisioning\_thin | False | Using thin provisioniung type for volumes |
 
 
@@ -113,7 +87,7 @@ Now you should restart Cinder service.
 Create new volume type according to the back end name provided previously:
 
 ```bash
-$ cinder type-create joviandss
+$ cinder type-create jdss-0
 ```
 
 Response would be(ID is unique ID, you will have different value):
@@ -121,7 +95,7 @@ Response would be(ID is unique ID, you will have different value):
 +--------------------------------------+-----------+-------------+-----------+
 |                  ID                  |    Name   | Description | Is_Public |
 +--------------------------------------+-----------+-------------+-----------+
-| 70f92fa6-200d-42cf-b132-cbbd3d9c71a4 | joviandss |      -      |    True   |
+| 70f92fa6-200d-42cf-b132-cbbd3d9c71a4 |   jdss-0  |      -      |    True   |
 +--------------------------------------+-----------+-------------+-----------+
 ```
 
@@ -136,7 +110,7 @@ Response would be like:
 |                  ID                  |     Name    | Description | Is_Public |
 +--------------------------------------+-------------+-------------+-----------+
 | 07a842ea-543c-455b-9688-327673a7b001 | lvmdriver-1 |      -      |    True   |
-| 70f92fa6-200d-42cf-b132-cbbd3d9c71a4 |  joviandss  |      -      |    True   |
+| 70f92fa6-200d-42cf-b132-cbbd3d9c71a4 |    jdss-0   |      -      |    True   |
 +--------------------------------------+-------------+-------------+-----------+
 ```
 
@@ -144,7 +118,7 @@ Now try to create volume:
 
 
 ```bash
-$ cinder create --name my_test_volume --volume-type joviandss 1
+$ cinder create --name my_test_volume --volume-type jdss-0 1
 ```
 
 Response would be like:
@@ -184,6 +158,52 @@ Now if you go to the JovianDSS Web interface you will see volume with name:
 9720999dd1e147009ac15348b823acfc
 ```
 
+### Multiple Pools
+
+All you need to add another JovianDSS Pool is to create a copy of JovianDSS config in cinder.conf file.
+
+For instance if you want to add `Pool-1` located on the same host as `Pool-0`.
+You extend `cinder.conf` file like:
+
+```
+[jdss-0]
+volume_driver = cinder.volume.drivers.open_e.iscsi.JovianISCSIDriver
+volume_backend_name = jdss-0
+jovian_rest_protocol = https
+jovian_hosts = 192.168.10.102
+jovian_rest_port = 82
+jovian_user = admin
+jovian_password = admin
+jovian_iscsi_target_portal_port = 3260
+jovian_target_prefix = iqn.2016-04.com.open-e.cinder: 
+jovian_pool = Pool-0
+jovian_chap_auth = True
+jovian_chap_pass_len = 14
+jovian_chap_username = user
+jovian_rest_send_repeats = 4
+jovian_recovery_delay = 60
+jovian_provisioning_thin = True
+
+[jdss-1]
+volume_driver = cinder.volume.drivers.open_e.iscsi.JovianISCSIDriver
+volume_backend_name = jdss-1
+jovian_rest_protocol = https
+jovian_hosts = 192.168.10.102
+jovian_rest_port = 82
+jovian_user = admin
+jovian_password = admin
+jovian_iscsi_target_portal_port = 3260
+jovian_target_prefix = iqn.2016-04.com.open-e.cinder: 
+jovian_pool = Pool-1
+jovian_chap_auth = True
+jovian_chap_pass_len = 14
+jovian_chap_username = user
+jovian_rest_send_repeats = 4
+jovian_recovery_delay = 60
+jovian_provisioning_thin = True
+
+```
+Do not forget to cahnge values of `jovian_pool` and `volume_backend_name `. Everything else remain the same.
 
 ## License
 
