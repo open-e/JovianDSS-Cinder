@@ -14,14 +14,17 @@
 #    under the License.
 
 """Network connection handling class for JovianDSS driver."""
-from base64 import b64encode
-from cinder.i18n import _
+
 import json
+import time
+
+from oslo_log import log as logging
+from oslo_utils import netutils as o_netutils
 import requests
 
-
 from cinder import exception
-from oslo_log import log as logging
+from cinder.i18n import _
+from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 
 
 LOG = logging.getLogger(__name__)
@@ -32,18 +35,55 @@ class JovianRESTProxy(object):
 
     def __init__(self, config):
         """:param config: config is like dict."""
+
+        self.proto = config.get('jovian_rest_protocol', 'https')
+        self.hosts = config.safe_get('jovian_hosts')
+        self.port = str(config.get('jovian_rest_port'))
+
+        self.active_host = 0
+
+        for host in self.hosts:
+            if o_netutils.is_valid_ip(host) is False:
+                err_msg = ('Invalid value of jovian_host property:'
+                           '%(addr)s, IP address expected.' %
+                           {'addr': host})
+
+                LOG.debug(err_msg)
+                raise exception.InvalidConfigurationValue(err_msg)
+
+        self.api_path = "/api/v3"
+        self.delay = config.get('jovian_recovery_delay', 40)
+
+        self.pool = config.safe_get('jovian_pool')
+
         self.user = config.get('jovian_user', 'admin')
         self.password = config.get('jovian_password', 'admin')
-        self.retry_n = config.get('jovian_rest_send_repeats', 3)
+        self.auth = requests.auth.HTTPBasicAuth(self.user, self.password)
         self.verify = False
+        self.retry_n = config.get('jovian_rest_send_repeats', 3)
         self.header = {'connection': 'keep-alive',
                        'Content-Type': 'application/json',
-                       'authorization': 'Basic ' +
-                       b64encode('%(username)s:%(password)s' %
-                                 {'username': self.user,
-                                  'password': self.password}).decode('utf-8')}
+                       'authorization': 'Basic '}
 
-    def request(self, request_method, url, json_data=None):
+    def _get_pool_url(self, host):
+        url = self.proto + '://' + \
+            host + ':' + \
+            self.port + \
+            "/api/v3" + \
+            "/pools/" + \
+            self.pool
+        return url
+
+    def _get_url(self, host):
+        url = (self.proto
+               + '://'
+               + host
+               + ':'
+               + self.port
+               + "/api/v3")
+        return url
+
+    def request(self, request_method, req, json_data=None):
         """Send request to the specific url.
 
         :param request_method: GET, POST, DELETE
@@ -51,66 +91,129 @@ class JovianRESTProxy(object):
         :param json_data: data
         """
         for i in range(int(str(self.retry_n))):
-            LOG.debug(
-                "JovianDSS: Sending request of type %(type)s to %(url)s \
-                Attempt: %(num)s.",
-                {'type': request_method,
-                 'url': url,
-                 'num': i})
+            for i in range(len(self.hosts)):
+                host = self.hosts[self.active_host]
+                url = self._get_url(host) + req
 
-            if json_data is not None:
                 LOG.debug(
-                    "JovianDSS: Sending data: %s.", str(json_data))
+                    "sending request of type %(type)s to %(url)s \
+                    attempt: %(num)s.",
+                    {'type': request_method,
+                     'url': url,
+                     'num': i})
+
+                if json_data is not None:
+                    LOG.debug(
+                        "sending data: %s.", str(json_data))
+                try:
+
+                    ret = self._request_routine(url, request_method, json_data)
+                    if len(ret) == 0:
+                        self.active_host = ((self.active_host + 1)
+                                            % len(self.hosts))
+                        continue
+                    return ret
+
+                except requests.ConnectionError as err:
+                    LOG.debug("Connection error %s", err)
+                    self.active_host = (self.active_host + 1) % len(self.hosts)
+                    continue
+            time.sleep(self.delay)
+
+        msg = (_('%(times) faild in a row') % {'times': i})
+
+        raise jexc.JDSSRESTProxyException(host=url, reason=msg)
+
+    def pool_request(self, request_method, req, json_data=None):
+        """Send request to the specific url.
+
+        :param request_method: GET, POST, DELETE
+        :param url: where to send
+        :param json_data: data
+        """
+        url = ""
+        for i in range(int(str(self.retry_n))):
+            for i in range(len(self.hosts)):
+                host = self.hosts[self.active_host]
+                url = self._get_pool_url(host) + req
+
+                LOG.debug(
+                    "sending pool request of type %(type)s to %(url)s \
+                    attempt: %(num)s.",
+                    {'type': request_method,
+                     'url': url,
+                     'num': i})
+
+                if json_data is not None:
+                    LOG.debug(
+                        "JovianDSS: Sending data: %s.", str(json_data))
+                try:
+
+                    ret = self._request_routine(url, request_method, json_data)
+                    if len(ret) == 0:
+                        self.active_host = ((self.active_host + 1)
+                                            % len(self.hosts))
+                        continue
+                    return ret
+
+                except requests.ConnectionError as err:
+                    LOG.debug("Connection error %s", err)
+                    self.active_host = (self.active_host + 1) % len(self.hosts)
+                    continue
+            time.sleep(int(self.delay))
+
+        msg = (_('%(times) faild in a row') % {'times': i})
+
+        raise jexc.JDSSRESTProxyException(host=url, reason=msg)
+
+    def _request_routine(self, url, request_method, json_data=None):
+        """Make an HTTPS request and return the results."""
+
+        ret = None
+        for i in range(3):
+            ret = dict()
             try:
+                response_obj = requests.request(request_method,
+                                                auth=self.auth,
+                                                url=url,
+                                                headers=self.header,
+                                                data=json.dumps(json_data),
+                                                verify=self.verify)
 
-                ret = self.request_routine(url, request_method, json_data)
+                LOG.debug('response code: %s', response_obj.status_code)
+                LOG.debug('response data: %s', response_obj.text)
 
-                # Work aroud for case when we have backend internal Fail.
-                #                                           OS Fail
+                ret['code'] = response_obj.status_code
+
+                if '{' in response_obj.text and '}' in response_obj.text:
+                    if "error" in response_obj.text:
+                        ret["error"] = json.loads(response_obj.text)["error"]
+                    else:
+                        ret["error"] = None
+                    if "data" in response_obj.text:
+                        ret["data"] = json.loads(response_obj.text)["data"]
+                    else:
+                        ret["data"] = None
+
                 if ret["code"] == 500:
                     if ret["error"] is not None:
                         if ("errno" in ret["error"]) and \
                                 ("class" in ret["error"]):
-                            if (ret["error"]["errno"] is 2) and\
+                            if (ret["error"]["errno"] == 2) and\
                                     (ret["error"]["class"] ==
                                         "exceptions.OSError"):
                                 LOG.debug(
-                                    "JovianDSS: Facing exceptions.OSError!")
+                                    "Internal JDSS error retrying!")
                                 continue
+                break
 
-                return ret
             except requests.HTTPError as err:
-                LOG.debug("Unable to execute: %s", err)
-                continue
-            except requests.ConnectionError as err:
-                LOG.debug("Unable to execute: %s", err)
-
-        msg = (_('%(times) faild in a row') % {'times': i})
-
-        raise exception.JDSSRESTProxyException(host=url, reason=msg)
-
-    def request_routine(self, url, request_method, json_data=None):
-        """Make an HTTPS request and return the results."""
-        response_obj = requests.request(request_method,
-                                        url=url,
-                                        headers=self.header,
-                                        data=json.dumps(json_data),
-                                        verify=self.verify)
-
-        LOG.debug('JovianDSS: Response code: %s', response_obj.status_code)
-        LOG.debug('JovianDSS: Response data: %s', response_obj.text)
-
-        ret = dict()
-        ret['code'] = response_obj.status_code
-
-        if '{' in response_obj.text and '}' in response_obj.text:
-            if "error" in response_obj.text:
-                ret["error"] = json.loads(response_obj.text)["error"]
-            else:
-                ret["error"] = None
-            if "data" in response_obj.text:
-                ret["data"] = json.loads(response_obj.text)["data"]
-            else:
-                ret["data"] = None
+                LOG.debug("HTTP parsing error %s", err)
+                self.active_host = (self.active_host + 1) % len(self.hosts)
+                pass
 
         return ret
+
+    def get_active_host(self):
+        """Return address of currently used host."""
+        return self.hosts[self.active_host]
