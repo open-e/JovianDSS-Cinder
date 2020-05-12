@@ -17,8 +17,10 @@
 import math
 import random
 import re
+
+from oslo_log import log as logging
+from oslo_utils import units as o_units
 import six
-import string
 
 from cinder import exception
 from cinder.i18n import _
@@ -27,8 +29,6 @@ from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 from cinder.volume.drivers.open_e.jovian_common import jdss_common as jcom
 from cinder.volume.drivers.open_e.jovian_common import rest
 from cinder.volume.drivers.open_e import options
-from oslo_log import log as logging
-from oslo_utils import units as o_units
 
 
 LOG = logging.getLogger(__name__)
@@ -219,7 +219,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             self.ra.delete_lun(volume_name, recursively_children=cascade)
         except jexc.JDSSRESTException as err:
             if "volume is busy" == err.args[0]:
-                LOG.error('Failed to delete volume %(id)', {"id":volume_name})
+                LOG.error('Failed to delete volume %s', volume_name)
                 raise exception.VolumeIsBusy(
                     data=('Failed to delete volume %s', volume_name))
             raise exception.VolumeBackendAPIException(
@@ -235,7 +235,8 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 rdd_data = volume['replication_driver_data']
 
                 rdd_snapshots = self.re_tmp_snapshot.match(rdd_data).group(1)
-                origin_volume = jcom.origin_volume(volume_info["origin"])
+                origin_volume = jcom.origin_volume(self.pool,
+                                                   volume_info["origin"])
                 origin_snapshot = jcom.origin_snapshot(volume_info["origin"])
                 LOG.debug("Original vol %(orig_vol)s"
                           "original snap %(orig_snap)s "
@@ -300,16 +301,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except jexc.JDSSException:
 
-            LOG.debug('Failed to create tmp snapshot %(snapshot)s'
-                      'for volume %(volume)s.', {
-                          'snapshot': tmp_snapshot_name,
-                          'volume': tmp_snapshot_name})
-
-            raise exception.VolumeBackendAPIException(
-                'Failed to create tmp snapshot %(snapshot) for volume'
-                '%(volume)', {
-                    'snapshot': tmp_snapshot_name,
-                    'volume': tmp_snapshot_name})
+            msg = ('Failed to create tmp snapshot %(snapshot)s'
+                   'for volume %(volume)s.'.format(
+                       snapshot=tmp_snapshot_name,
+                       volume=tmp_snapshot_name))
+            LOG.debug(msg)
+            raise exception.VolumeBackendAPIException(message=msg)
 
         try:
             self.ra.create_volume_from_snapshot(
@@ -320,7 +317,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except jexc.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
-                LOG.error('Failed to create volume %(vname).', {'vname':volume_name})
+                LOG.error('Failed to create volume %s.', volume_name)
                 raise exception.VolumeBackendAPIException(
                     "Unable to create volume.")
 
@@ -354,16 +351,11 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except jexc.JDSSException as err:
             if 'unable to create volume' in err.args[0]:
+                msg = ('Failed to create volume %(vol)'
+                       'from snapshot %(snap)'.format(vol=volume['id'],
+                                                      snap=snapshot['id']))
 
-                LOG.debug('Failed to create volume %(vol)'
-                          'from snapshot %(snap)', {
-                              'vol': volume['id'],
-                              'snap': snapshot['id']})
-
-                raise exception.VolumeBackendAPIException(
-                    'Failed to create volume %(vol)s from snapshot %(snap)s', {
-                        'vol': volume['id'],
-                        'snap': snapshot['id']})
+                raise exception.VolumeBackendAPIException(msg)
 
         if snapshot['volume_size'] < volume['size']:
             self.extend_volume(volume, int(volume['size']))
@@ -383,12 +375,13 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 snapshot['id'])
 
         except jexc.JDSSRESTException as err:
-            LOG.error(('Failed to create snapshot %(snap)'
-                       'for volume %(vol) %(msg).') % {
-                           'snap': snapshot['id'],
-                           'vol': snapshot['volume_id'],
-                           'msg': err.message})
 
+            msg = (('Failed to create snapshot %(snap)'
+                    'for volume %(vol) %(msg).'),
+                   {'snap': snapshot['id'],
+                    'vol': snapshot['volume_id'],
+                    'msg': err.message})
+            LOG.error(msg)
             raise exception.VolumeBackendAPIException(msg)
 
     def delete_snapshot(self, snapshot):
@@ -580,13 +573,13 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except jexc.JDSSRESTException as ex:
 
-            err_msg = ('Unable to create target %(target)s '
-                       'because of %(error)s.' %
-                       {'target': target_name, 'error': ex.message})
+            msg = ('Unable to create target %(target)s '
+                   'because of %(error)s.'.format(target=target_name,
+                                                  error=ex.message))
 
-            LOG.debug(err_msg, resource=volume)
+            LOG.debug(msg, resource=volume)
 
-            raise exception.VolumeBackendAPIException(data=err_msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         if use_chap:
 
@@ -596,15 +589,14 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
             except jexc.JDSSRESTException as ex:
 
-                err_msg = (_('Unable to create'
-                             ' user %(user)s for target %(target)s'
-                             ' because of %(error)s.') %
-                           {
-                               'target': target_name,
-                               'user': chap_cred['name'],
-                               'error': six.text_type(ex)})
+                err_msg = ('Unable to create'
+                           ' user %(user)s for target %(target)s'
+                           ' because of %(error)s.'.format(
+                               target=target_name,
+                               user=chap_cred['name'],
+                               error=six.text_type(ex)))
 
-                LOG.debug(err_msg, resource=volume)
+                LOG.debug(err_msg)
 
                 raise exception.VolumeBackendAPIException(data=err_msg)
 
@@ -615,17 +607,15 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except jexc.JDSSRESTException as ex:
 
-                err_msg = ('Unable to attach'
-                           'target %(target)s to'
-                           'volume %(volume)s '
-                           'because of %(error)s.' %
-                           {'target': target_name,
-                            'volume': volume['id'],
-                            'error': six.text_type(ex)})
+            err_msg = ('Unable to attach target %(target)s to'
+                       'volume %(volume)s because of %(error)s.'.format(
+                           target=target_name,
+                           volume=volume['id'],
+                           error=six.text_type(ex)))
 
-                LOG.debug(err_msg, resource=volume)
+            LOG.debug(err_msg)
 
-                raise exception.VolumeBackendAPIException(data=err_msg)
+            raise exception.VolumeBackendAPIException(message=err_msg)
 
     def _prepare_target_volume(self, volume, connector):
         """_prepare_target_volume.
@@ -651,10 +641,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                         target_name,
                         volume["id"]) is False:
 
-                    msg = _('Unable to attach volume %(vol)s to'
-                            ' target %(targ)s') % {
-                                'vol': volume[id],
-                                'targ': target_name}
+                    msg = ('Unable to attach volume %(vol)s to'
+                           ' target %(targ)s'.format(vol=volume[id],
+                                                     targ=target_name))
                     LOG.debug(msg)
 
                     raise exception.VolumeBackendAPIException(
@@ -721,7 +710,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
             raise exception.VolumeBackendAPIException(
                 'Unable to get'
-                ' zvolume lun for volume %s.', vname)
+                ' zvolume lun for volume {}.'.format(vname))
 
         iface_info = []
         multipath = connector.get('multipath', False)
@@ -750,8 +739,10 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 iscsi_properties['target_luns'].append(int(zvol_info["lun"]))
         else:
             iscsi_properties['target_iqn'] = self.jovian_target_prefix + vname
-            iscsi_properties['target_portal'] = \
-                self.ra.get_active_host() + ":" + self.jovian_iscsi_target_portal_port
+            iscsi_properties['target_portal'] = (
+                self.ra.get_active_host()
+                + ":"
+                + self.jovian_iscsi_target_portal_port)
 
         iscsi_properties['target_discovered'] = False
 
@@ -790,7 +781,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         ip_settings = self.ra.get_target_ip_settings(target_name)
 
         LOG.debug("initialize_connection for %(volume)s %(ip)s."
-                  "with ip list %(ip_list)s." %
+                  "with ip list %(ip_list)s.",
                   {'volume': volume['id'],
                    'ip': connector['ip'],
                    'ip_list': str(ip_settings['allow_ip'])})
@@ -824,7 +815,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             ip_settings['allow_ip'].remove(connector['ip'])
 
             LOG.debug("terminate_connection for %(volume)s %(ip)s."
-                      "from ip list %(ip_list)s." %
+                      "from ip list %(ip_list)s.",
                       {'volume': volume['id'],
                        'ip': connector['ip'],
                        'ip_list': str(ip_settings['allow_ip'])})

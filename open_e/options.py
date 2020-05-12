@@ -17,8 +17,8 @@ from oslo_config import cfg
 
 jdss_connection_opts = [
     cfg.ListOpt('jovian_hosts',
-               default='',
-               help='IP address of Open-E JovianDSS SA'),
+                default='',
+                help='IP address of Open-E JovianDSS SA'),
     cfg.IntOpt('jovian_rest_port',
                default=82,
                help='HTTP port to connect to OpenE JovianDSS REST API server'),

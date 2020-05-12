@@ -14,15 +14,17 @@
 #    under the License.
 
 """Network connection handling class for JovianDSS driver."""
-from base64 import b64encode
-from cinder.i18n import _
+
 import json
-import requests
 import time
 
-from cinder import exception
 from oslo_log import log as logging
 from oslo_utils import netutils as o_netutils
+import requests
+
+from cinder import exception
+from cinder.i18n import _
+from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 
 
 LOG = logging.getLogger(__name__)
@@ -73,8 +75,12 @@ class JovianRESTProxy(object):
         return url
 
     def _get_url(self, host):
-        url = self.proto + '://' + \
-            host + ':' +  self.port + "/api/v3"
+        url = (self.proto
+               + '://'
+               + host
+               + ':'
+               + self.port
+               + "/api/v3")
         return url
 
     def request(self, request_method, req, json_data=None):
@@ -103,7 +109,8 @@ class JovianRESTProxy(object):
 
                     ret = self._request_routine(url, request_method, json_data)
                     if len(ret) == 0:
-                        self.active_host = (self.active_host + 1) % len(self.hosts)
+                        self.active_host = ((self.active_host + 1)
+                                            % len(self.hosts))
                         continue
                     return ret
 
@@ -115,7 +122,7 @@ class JovianRESTProxy(object):
 
         msg = (_('%(times) faild in a row') % {'times': i})
 
-        raise exception.JDSSRESTProxyException(host=url, reason=msg)
+        raise jexc.JDSSRESTProxyException(host=url, reason=msg)
 
     def pool_request(self, request_method, req, json_data=None):
         """Send request to the specific url.
@@ -144,7 +151,8 @@ class JovianRESTProxy(object):
 
                     ret = self._request_routine(url, request_method, json_data)
                     if len(ret) == 0:
-                        self.active_host = (self.active_host + 1) % len(self.hosts)
+                        self.active_host = ((self.active_host + 1)
+                                            % len(self.hosts))
                         continue
                     return ret
 
@@ -156,7 +164,7 @@ class JovianRESTProxy(object):
 
         msg = (_('%(times) faild in a row') % {'times': i})
 
-        raise exception.JDSSRESTProxyException(host=url, reason=msg)
+        raise jexc.JDSSRESTProxyException(host=url, reason=msg)
 
     def _request_routine(self, url, request_method, json_data=None):
         """Make an HTTPS request and return the results."""
@@ -191,7 +199,7 @@ class JovianRESTProxy(object):
                     if ret["error"] is not None:
                         if ("errno" in ret["error"]) and \
                                 ("class" in ret["error"]):
-                            if (ret["error"]["errno"] is 2) and\
+                            if (ret["error"]["errno"] == 2) and\
                                     (ret["error"]["class"] ==
                                         "exceptions.OSError"):
                                 LOG.debug(

@@ -14,19 +14,20 @@
 #    under the License.
 
 from cinder import exception
+from cinder.i18n import _
+
 
 class JDSSException(exception.VolumeDriverException):
-    message = "%(reason)s"
+    message = _("%(reason)s")
 
 
 class JDSSRESTException(JDSSException):
-    message = "JovianDSS REST request %(request) faild because: %(reason)s."
+    message = _("JDSS REST request %(request) faild: %(reason)s.")
 
 
 class JDSSRESTProxyException(JDSSException):
-    message = "JovianDSS connection with %(host) failed because: %(reason)s."
+    message = _("JDSS connection with %(host) failed: %(reason)s.")
 
 
 class JDSSRESTResourceNotFoundException(JDSSException):
-    message = "JovianDSS unable to found resource %(message)s."
-
+    message = _("JDSS unable to found resource %(message)s.")
