@@ -60,7 +60,7 @@ jovian_ignore_tpath = 192.168.10.105,192.168.10.106
 | volume\_driver|   			| Specify location of the driver source code |
 | volume\_backend\_name 	|   JovianDSS-iSCSI   	| Name of the back end 	|
 | jovian\_rest\_protocol 	| https | Protocol to connect to JovianDSS. Https must be enabled on the JovianDSS site [1].  |
-| jovian\_host   | 	               | IP addres of the JovianDSS |  
+| jovian\_hosts   | 	               | coma separated list of IP address of the JovianDSS |  
 | jovian\_rest\_port | 82               | Must be set according to the settings in [1] |
 | jovian\_user       | admin            | Must be set according to the settings in [1] |
 | jovian\_password   | admin            | Must be set according to the settings in [1] |
@@ -75,7 +75,8 @@ jovian_ignore_tpath = 192.168.10.105,192.168.10.106
 | jovian\_provisioning\_thin | False | Using thin provisioniung type for volumes |
 | jovian\_ignore\_tpath | Empty list | Coma separated list of IP addresses to ignore if multipath is enabled for volume attachment. |
 
-[1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access 
+[1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access
+
 [2] [Can be created by going to JovianDSS Web interface/Storage](https://www.open-e.com/site_media/download/documents/Open-E-JovianDSS-Advanced-Metro-High-Avability-Cluster-Step-by-Step-2rings.pdf)
 
 
