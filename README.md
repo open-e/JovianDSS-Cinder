@@ -76,7 +76,7 @@ jovian_ignore_tpath = 192.168.10.105,192.168.10.106
 | jovian\_ignore\_tpath | Empty list | Coma separated list of IP addresses to ignore if multipath is enabled for volume attachment. |
 
 [1] Can be enabled by going to JovianDSS Web interface/System Settings/REST Access 
-[2] [Can be created by going to JovianDSS Web interface/Storage](https://www.open-e.com/site_media/download/documents/Open-E-JovianDSS-High-Availability-Cluster-Step-by-Step.pdf)
+[2] [Can be created by going to JovianDSS Web interface/Storage](https://www.open-e.com/site_media/download/documents/Open-E-JovianDSS-Advanced-Metro-High-Avability-Cluster-Step-by-Step-2rings.pdf)
 
 
 [More info about Open-E JovianDSS](http://blog.open-e.com/?s=how+to)
