@@ -207,8 +207,8 @@ Do not forget to change values of `jovian_pool` and `volume_backend_name `. Ever
 
 ### HA Cluster
 
-To utilise Hight Availability feature of of JovianDSS:
-1. [Configure Pool to high availabilyt cluster](https://www.youtube.com/watch?v=juWIQT_bAfM)
+To utilize High Availability feature of of JovianDSS:
+1. [Configure Pool to high availability cluster](https://www.youtube.com/watch?v=juWIQT_bAfM)
 2. Set `jovian_hosts` with list of `virtual IPs` associated with this Pool
 
 For instance if you have `Pool-2` with 2 virtual IPs 192.168.21.100 and 192.168.31.100 the configuration file will look like:
