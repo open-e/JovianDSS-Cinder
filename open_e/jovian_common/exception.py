@@ -22,12 +22,25 @@ class JDSSException(exception.VolumeDriverException):
 
 
 class JDSSRESTException(JDSSException):
-    message = _("JDSS REST request %(request) faild: %(reason)s.")
+    message = _("JDSS REST request %(request)s faild: %(reason)s.")
 
 
 class JDSSRESTProxyException(JDSSException):
-    message = _("JDSS connection with %(host) failed: %(reason)s.")
+    message = _("JDSS connection with %(host)s failed: %(reason)s.")
 
 
 class JDSSRESTResourceNotFoundException(JDSSException):
-    message = _("JDSS unable to found resource %(message)s.")
+    message = _("JDSS resource %(res)s DNE.")
+
+class JDSSRESTVolumeDNEException(JDSSException):
+    message = _("JDSS volume %(volume)s DNE.")
+
+class JDSSRESTSnapshotExistsException(JDSSException):
+    message = _("JDSS snapshot %(snapshot)s already exists.")
+
+class JDSSRESTVolumeExistsException(JDSSException):
+    message = _("JDSS volume %(volume)s already exists.")
+
+class JDSSRESTSnapshotIsBusyException(JDSSException):
+    message = _("JDSS snapshot %(snapshot)s already exists.")
+

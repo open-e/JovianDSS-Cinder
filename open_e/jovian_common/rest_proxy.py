@@ -44,7 +44,7 @@ class JovianRESTProxy(object):
 
         for host in self.hosts:
             if o_netutils.is_valid_ip(host) is False:
-                err_msg = ('Invalid value of jovian_host property:'
+                err_msg = ('Invalid value of jovian_host property: '
                            '%(addr)s, IP address expected.' %
                            {'addr': host})
 
@@ -66,21 +66,18 @@ class JovianRESTProxy(object):
                        'authorization': 'Basic '}
 
     def _get_pool_url(self, host):
-        url = self.proto + '://' + \
-            host + ':' + \
-            self.port + \
-            "/api/v3" + \
-            "/pools/" + \
-            self.pool
+        url = ('%(proto)s://%(host)s:%(port)s/api/v3/pools/%(pool)s' % {
+               'proto': self.proto,
+               'host': host,
+               'port': self.port,
+               'pool': self.pool})
         return url
 
     def _get_url(self, host):
-        url = (self.proto
-               + '://'
-               + host
-               + ':'
-               + self.port
-               + "/api/v3")
+        url = ('%(proto)s://%(host)s:%(port)s/api/v3' % {
+            'proto': self.proto,
+            'host': host,
+            'port': self.port})
         return url
 
     def request(self, request_method, req, json_data=None):
@@ -104,7 +101,7 @@ class JovianRESTProxy(object):
 
                 if json_data is not None:
                     LOG.debug(
-                        "sending data: %s.", str(json_data))
+                        "sending data: %s.", json_data)
                 try:
 
                     ret = self._request_routine(url, request_method, json_data)

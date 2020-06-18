@@ -42,8 +42,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     .. code-block:: none
 
         1.0.0 - Initial base driver
-        1.0.1
-        1.0.2 - Provide support for HA claster and virtual IP
+        1.0.1 - Provide support for multiple target IP
+        1.0.2 - Provide support for HA claster 
+                        support for cascade deletion
     """
 
     # ThirdPartySystems wiki page
@@ -58,7 +59,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         self.ra = None
         self.conf = dict()
 
-        LOG.debug('Enter JovianISCSIDriver')
         self.configuration.append_config_values(
             options.jdss_connection_opts)
         self.configuration.append_config_values(
@@ -91,12 +91,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             'jovian_target_group_prefix')
 
         self.jovian_chap_auth = self.configuration.safe_get('jovian_chap_auth')
-        self.jovian_chap_username = \
-            self.configuration.safe_get('jovian_chap_username')
+        self.jovian_chap_username = (
+            self.configuration.safe_get('jovian_chap_username'))
         self.jovian_chap_pass_len = self.configuration.safe_get(
             'jovian_chap_pass_len')
-        self.jovian_sparse = \
-            self.configuration.safe_get('jovian_provisioning_thin')
+        self.jovian_sparse = (
+            self.configuration.safe_get('jovian_provisioning_thin'))
         self.jovian_ignore_tpath = self.configuration.get(
             'jovian_ignore_tpath', None)
 
@@ -106,12 +106,20 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         """Verify that the pool exists."""
         if not self.ra.is_pool_exists():
             LOG.error("Setup is incorrect, please check connection settings.")
-            raise exception.VolumeDriverException("Bad configuration expected")
+            raise exception.VolumeDriverException(_("Bad configuration expected"))
     # TODO(andrei.perepiolkin@open-e.com): Provide additional checks
 
     def _get_zvol_name(self, volume_name):
         """Return zvol name that corresponds given volume name."""
         return '%s/%s' % (self.pool, volume_name)
+
+    def _get_vname(self, volume_id):
+        """Return associated vol name."""
+        return 'v_%s' %  volume_name
+
+    def _get_sname(self, snapshot_id):
+        """Return associated snapshot id."""
+        return 'v_%s' %  volume_name
 
     def _get_target_name(self, volume_name):
         """Return iSCSI target name to access volume."""
@@ -160,7 +168,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 continue
             if iface['address'] not in self.jovian_ignore_tpath:
                 out.append(iface['address'])
-        LOG.debug('interfaces found %s', str(out))
+        LOG.debug('interfaces found %s', out)
         return out
 
     def create_volume(self, volume):
@@ -169,8 +177,8 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param volume: volume reference
         :return: model update dict for volume reference
         """
-        vname = volume['id']
-        LOG.debug('creating volume %s.', volume['id'])
+        vname = _get_vname(volume['id'])
+        LOG.debug('creating volume %s.', vname)
 
         provider_location = self._get_provider_location(vname)
         provider_auth = self._get_provider_auth()
@@ -184,8 +192,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             LOG.error("Create volume error. Because %(err).",
                       {"err": ex.message})
             raise exception.VolumeBackendAPIException(
-                message=('Failed to create volume %s.',
-                         volume['id']))
+                message=_('Failed to create volume %s.') % volume['id'])
         ret = {}
         if provider_auth is not None:
             ret['provider_auth'] = provider_auth
@@ -194,76 +201,218 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         return ret
 
+    def _hide_object(self, vname):
+        """Makes volume/snapshot invisible for OpenStack"""
+        rename = {'name': jcom.hidden(vname)}
+        deletable = False
+        try:
+            self.ra.modify_lun(vname, rename)
+        except jexc.JDSSException as err:
+            LOG.warning('Failure in hidding  %s,'
+                        ' err: %s', vname, err)
+            msg = _('Failure in interruction with %s.') % vname
+            raise exception.VolumeBackendAPIException(msg)
+
+    def _clean_garbage_snapshots(self, vname, snapshots):
+        """Delete phisical snapshots that have no descendents"""
+        garbage = []
+        for s in snapshots:
+            try:
+                if s['clones'] == '':
+                    try:
+                        self.ra.delete_snapshot(vname, s['name'])
+                    except JDSSException as err:
+                        args = {'obj': vname, 'err': err.message}
+                        msg = _("Unable to clean garbage for "
+                                "%(obj)s: %(err)s") % args
+                        raise exception.VolumeBackendAPIException(msg)
+            except jexc.JDSSException as err:
+                raise exception.VolumeBackendAPIException(err.message)
+        
+        for g in garbage:
+            snapshots.remove(g)
+
+        return snapshots
+        
+    def _cascade_volume_delete(self, o_vname, o_snaps):
+        """Delete or hides volume if it is busy
+        
+        Go over snapshots and deletes them if possible
+        Calls for recursiv evolume deletion if volume do not have childs
+        """
+        vsnaps = []
+        deletable = True
+
+        for s in o_snaps:
+            if 's_' in s['name']]
+                vsnaps += [(s['name']:jcom.full_name_volume(s['clones']))]
+
+        active_vsnaps = [vs for vs in vsnaps if jcom.is_hidden(vs[1]) is False]
+        
+        # If volume have clones or hidden snapshots it should be hidden
+        if len(active_vsnaps) < len(o_snaps):
+            deletable = False
+
+        for vs in active_vsnaps:
+            psnap = []
+            try:
+                psnap = self.ra.get_snapshots(vs[1])
+            except jexc.JDSSException as err:
+                LOG.warning("Failure in getting phisical snapshots "
+                            "for virtual snapshot %s, err: %s", vs[1], err)
+                msg = _('Failure in interruction with '
+                        'snapshot %s.') % vs[1]
+                raise exception.VolumeBackendAPIException(msg)
+            if len(psnap) > 0:
+                deletable = False
+                self._hide_object(o_vname)
+            else:
+                try:
+                    self.ra.delete_snapshot(o_vname, 
+                                            vs[0],
+                                            recursively_children=True,
+                                            recursively_dependents=True,
+                                            force_umount=True):
+                except jexc.JDSSException as err:
+                    LOG.warning('Failure during deletion of physical '
+                                'snapshot %s, err: %s', vs[0], err)
+                    msg = _('Failure during deletin of virtual snapshot '
+                            '%s') % vs[1]
+                    raise exception.VolumeBackendAPIException(msg)
+   
+        if deletable:
+            self._gc_delete(o_vname)
+    
     def delete_volume(self, volume, cascade=False):
         """Destroy a volume.
 
         :param volume: volume reference
+        :param cascade: remove snapshots of a volume as well
         """
-        volume_name = volume['id']
+        vname = _get_vname(volume['id'])
 
-        LOG.debug('deleating volume %s.', volume_name)
+        LOG.debug('deleating volume %s.', vname)
 
-        volume_info = {}
+        snapshots = None 
         try:
-            volume_info = self.ra.get_lun(volume_name)
-        except jexc.JDSSException as err:
-            if 'unable to get volume' in err.args[0]:
-                LOG.debug('Volume %s does not exist, it seems it was already '
-                          'deleted.', volume_name)
+            snapshots = self.ra.get_snapshots(vname)
+        except jexc.JDSSRESTResourceNotFoundException:
+                LOG.debug('volume %s dne, it was already'
+                    'deleted.', vname)
                 return
+        except jexc.JDSSException as err:
+            raise exception.VolumeBackendAPIException(err.message)
 
-        # TODO(andrei.perepiolkin@open-e.com): implement rising of exceptions
-        # VolumeIsBusy, VolumeDriverException and VolumeBackendAPIException
+        snapshots = self._clean_garbage_snapshots(vname, snapshots)
 
+        vclones = [ s for s in snapshots if 'v_' in s['name']]
+        vsnaps = [ s for s in snapshots if 's_' in s['name']]
+
+        if cascade:
+            self._cascade_volume_delete(vname, snapshots)
+        else:
+            if len(snapshots) > 0:
+                self._hide_object(vname)
+            else:
+                self._gc_delete(vname)
+
+    def _gc_delete(self, vname):
+        """Delete volume and its hidden parents
+    
+        Deletes volume going recursivly to first active parent and cals 
+        recursive deletion
+        """
+        vol = None
         try:
-            self.ra.delete_lun(volume_name, recursively_children=cascade)
-        except jexc.JDSSRESTException as err:
-            if "volume is busy" == err.args[0]:
-                LOG.error('Failed to delete volume %s', volume_name)
-                raise exception.VolumeIsBusy(
-                    data=('Failed to delete volume %s', volume_name))
-            raise exception.VolumeBackendAPIException(
-                "Fail during volume deletion.")
+            vol = self.ra.get_volume(vname)
+        except jexc.JDSSRESTResourceNotFoundException:
+                LOG.debug('Volume %s does not exist, it was already'
+                    'deleted.', vname)
+                return
+        except jexc.JDSSException as err:
+            raise exception.VolumeBackendAPIException(err.message)
 
-        LOG.debug("volume info is %s.", volume_info)
+        if vol['is_clone'] == False:
+            try:
+                self.ra.delete_volume(vname)
+            except jexc.JDSSRESTException as err:
+                LOG.debug(
+                    "Unable to delete volume %(volume) with error %(err).", {
+                        "volume": volume,
+                        "err": err})
+                raise exception.SnapshotIsBusy(err)
+        else:
+            self._delete_back_recursivly(jcom.origin_volume(vol['origin']),
+                                         jcom.origin_snapshot(vol['origin']))
 
-        if 'origin' in volume_info and 'replication_driver_data' in volume:
+    #TODO: change from origin to ovname, osname
+    # make sure it is changed aroung driver
+    def _delete_back_recursivly(opvname, opsname)
+        """Deletes snapshot by removing its oldest removable parent
+        
+        Checks if source volume for this snapshot is hidden:
+        If it is hidden and have no other descenents, it calls itself on its
+            source snapshot if such exists, or deletes it
+        If it is not hidden, trigers delete for snapshot
 
-            if (volume_info["origin"] is not None) and\
-                    (volume['replication_driver_data'] is not None):
+        :param ovname: origin phisical volume name
+        :param osname: origin phisical snapshot name
+        """
+        sname = ovname 
+        vname = osname
 
-                rdd_data = volume['replication_driver_data']
+        if jcom.is_hidden(vname):
+            # Resource is hidden
+            snaps = []
+            try:
+                snaps = self.ra.get_snapshots(vname)
+            except jexc.JDSSRESTResourceNotFoundException:
+                LOG.debug('Unable to get snapshots related to volume %s,'
+                    ' volume do not exist.', vname)
+                return
+            except jexc.JDSSException as err:
+                raise exception.VolumeBackendAPIException(err.message)
 
-                rdd_snapshots = self.re_tmp_snapshot.match(rdd_data).group(1)
-                origin_volume = jcom.origin_volume(self.pool,
-                                                   volume_info["origin"])
-                origin_snapshot = jcom.origin_snapshot(volume_info["origin"])
-                LOG.debug("Original vol %(orig_vol)s"
-                          "original snap %(orig_snap)s "
-                          "replication_driver_data %(rdd)s", {
-                              "orig_vol": jcom.origin_volume(
-                                  self.pool, volume_info["origin"]),
-                              "orig_snap": jcom.origin_snapshot(
-                                  volume_info["origin"]),
-                              "rdd": rdd_snapshots})
+            if len(snaps) > 1:
+                try:
+                    self.ra.delete_snapshot(vname,
+                                            sname,
+                                            recursively_children=True,
+                                            recursively_dependents=True,
+                                            force_umount=True)
+                except jexc.JDSSException as err:
+                    raise exception.VolumeBackendAPIException(err.message)
+            else:
+                vol = None
+                try:
+                    vol = self.ra.get_volume(vname)
 
-                if origin_snapshot == rdd_snapshots:
-                    try:
-                        self.ra.delete_snapshot(
-                            self.pool,
-                            origin_volume,
-                            origin_snapshot)
-
-                    except jexc.JDSSRESTException as err:
-                        LOG.debug(
-                            "Unable to delete temporal snapshot %(snapshot)s"
-                            " of volume %(volume) with error %(err).", {
-                                "snapshot": origin_snapshot,
-                                "volume": volume,
-                                "err": err})
-                        raise exception.SnapshotIsBusy(err)
+                except jexc.JDSSRESTResourceNotFoundException:
+                    LOG.debug('volume %s does not exist, it was already'
+                        'deleted.', vname)
                     return
-        return
+                except jexc.JDSSException as err:
+                    raise exception.VolumeBackendAPIException(err.message)
+
+                if vol['is_clone'] == True:
+                    self._delete_back_recursivly(
+                            jcom.origin_volume(vol['origin']),
+                            jcom.origin_snapshot(vol['origin']))
+                else:
+                    self.ra.delete_volume(vname,
+                                          recursively_children=True,
+                                          recursively_dependents=True,
+                                          force_umount=True)
+        else:
+            # Resource is active
+            try:
+                self.ra.delete_snapshot(vname,
+                                        sname,
+                                        recursively_children=True,
+                                        recursively_dependents=True,
+                                        force_umount=True)
+            except jexc.JDSSException as err:
+                raise exception.VolumeBackendAPIException(err.message)
 
     def extend_volume(self, volume, new_size):
         """Extend an existing volume.
@@ -280,55 +429,75 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             raise exception.VolumeBackendAPIException(
                 message=('Failed to extend volume %s.', volume['id']))
 
+    def _clone_object(self, oname, coname):
+        """Creates a clone of specified object
+        
+        :param: oname: name of an object to clone
+        :param: coname: name of a new clone
+        """
+        LOG.debug('cloning %(oname)s to %(coname)', {
+                      "oname": oname,
+                      "coname": coname})
+
+        try:
+            self.ra.create_snapshot(oname, coname)
+        except jexc.JDSSRESTSnapshotExistsException as err:
+            try:
+                self.ra.delete_snapshot(oname, coname)
+            except jexc.JDSSRESTSnapshotIsBusyException as err:
+                raise exception.Duplicate()
+            except jexc.JDSSException as err:
+                LOG.warning(err.message)
+                raise exception.VolumeBackendAPIException(
+                    _("Unable to create volume %s.") % coname)
+                
+        except jexc.JDSSException as err:
+            args = {'snapshot': coname,
+                    'object': oname,
+                    'err': err.message}
+            msg = _('Failed to create tmp snapshot %(snapshot)s'
+                    'for object %(object)s: %(err)s') % args
+            raise exception.VolumeBackendAPIException(message=msg)
+
+        try:
+            self.ra.create_volume_from_snapshot(
+                oname,
+                coname,
+                coname,
+                sparse=self.jovian_sparse)
+        except jexc.JDSSRESTVolumeExistsException as err:
+                raise exception.Duplicate()
+        except jexc.JDSSException as err:
+            try:
+                self.ra.delete_snapshot(oname, coname)
+            except jexc.JDSSRESTSnapshotIsBusyException as err:
+                raise exception.Duplicate()
+            except jexc.JDSSException as err:
+                LOG.warning(err.message)
+                raise exception.VolumeBackendAPIException(
+                    _("Unable to create volume %s.") % coname)
+
+        #if extend:
+        #    if src_vref['size'] < volume['size']:
+        #        self.extend_volume(volume, int(volume['size']))
+    
     def create_cloned_volume(self, volume, src_vref):
         """Create a clone of the specified volume.
 
         :param volume: new volume reference
         :param src_vref: source volume reference
         """
-        volume_name = volume['id']
-        src_vref_name = src_vref['id']
-        tmp_snapshot_name = "tmp_snapshot_for_volume_" + volume_name
+        cvname = jcom.vname(volume['id'])
 
-        LOG.debug('create cloned volume %(id)s'
-                  'from volume %(id_from)s by tmp snapshot %(snapshot)s.', {
-                      "id": volume['id'],
-                      "id_from": src_vref_name,
-                      "snapshot": tmp_snapshot_name})
+        vname = jcom.vname(src_vref['id'])
 
-        try:
-            self.ra.create_snapshot(src_vref_name, tmp_snapshot_name)
+        LOG.debug('cloned volume %(id)s to %(id_clone)', {
+                      "id": src_vref['id'],
+                      "id_clone": volume['id']})
 
-        except jexc.JDSSException:
+        self._clone_object(vname, cvname, extend=True)
 
-            msg = ('Failed to create tmp snapshot %(snapshot)s'
-                   'for volume %(volume)s.'.format(
-                       snapshot=tmp_snapshot_name,
-                       volume=tmp_snapshot_name))
-            LOG.debug(msg)
-            raise exception.VolumeBackendAPIException(message=msg)
-
-        try:
-            self.ra.create_volume_from_snapshot(
-                volume_name,
-                tmp_snapshot_name,
-                src_vref_name,
-                sparse=self.jovian_sparse)
-
-        except jexc.JDSSException as err:
-            if 'unable to create volume' in err.args[0]:
-                LOG.error('Failed to create volume %s.', volume_name)
-                raise exception.VolumeBackendAPIException(
-                    "Unable to create volume.")
-
-        if src_vref['size'] < volume['size']:
-            self.extend_volume(volume, int(volume['size']))
-
-        ddata = dict()
-        ddata['replication_driver_data'] = 'tmp_snapshot:' +\
-                                           tmp_snapshot_name +\
-                                           ','
-        return ddata
+        self.extend_volume(volume, int(volume['size']))
 
     def create_volume_from_snapshot(self, volume, snapshot):
         """Create a volume from a snapshot.
@@ -341,24 +510,20 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         LOG.debug('create volume %(vol)s from snapshot %(snap)s', {
             'vol': volume['id'],
             'snap': snapshot['name']})
+        
+        cvname = jcom.vname(volume['id'])
+        sname = jcom.sname(snapshot['volume_id'])
+
+        self._clone_object(sname, cvname)
 
         try:
-            self.ra.create_volume_from_snapshot(
-                volume['id'],
-                snapshot['id'],
-                snapshot['volume_id'],
-                sparse=self.jovian_sparse)
-
-        except jexc.JDSSException as err:
-            if 'unable to create volume' in err.args[0]:
-                msg = ('Failed to create volume %(vol)'
-                       'from snapshot %(snap)'.format(vol=volume['id'],
-                                                      snap=snapshot['id']))
-
-                raise exception.VolumeBackendAPIException(msg)
-
-        if snapshot['volume_size'] < volume['size']:
             self.extend_volume(volume, int(volume['size']))
+        except jexc.JDSSException as err:
+            # If volume can't be set to a proper size make sure to clean it
+            # before failing
+            self._delete_back_recursivly(sname, vname)
+            raise exception.VolumeBackendAPIException(err.message)
+
 
     def create_snapshot(self, snapshot):
         """Create snapshot of existing volume.
@@ -369,44 +534,44 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             'snap': snapshot['id'],
             'vol': snapshot['volume_id']})
 
+        vname = jcom.vname(snapshot['volume_id'])
+        sname = jcom.sname(snapshot['id'])
+
+        self._clone_object(vname, sname)
+
         try:
-            self.ra.create_snapshot(
-                snapshot['volume_id'],
-                snapshot['id'])
-
-        except jexc.JDSSRESTException as err:
-
-            msg = (('Failed to create snapshot %(snap)'
-                    'for volume %(vol) %(msg).'),
-                   {'snap': snapshot['id'],
-                    'vol': snapshot['volume_id'],
-                    'msg': err.message})
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(msg)
+            self.ra.make_readonly_lun(sname):
+        except jexc.JDSSException as err:
+            # Name of snapshot should be the same as a name of volume 
+            # that is going to be created from it
+            self._delete_back_recursivly(sname, vname)
+            raise exception.VolumeBackendAPIException(err.message)
 
     def delete_snapshot(self, snapshot):
         """Delete snapshot of existing volume.
 
         :param snapshot: snapshot reference
         """
+        sname = _get_vname(snapshot['id'])
+
+        LOG.debug('deleating snapshot %s.', sname)
+
+        snapshots = None 
         try:
-            self.ra.delete_snapshot(
-                snapshot['volume_id'],
-                snapshot['id'])
+            snapshots = self.ra.get_snapshots(sname)
+        except jexc.JDSSRESTResourceNotFoundException:
+                LOG.debug('volume %s dne, it was already'
+                    'deleted.', vname)
+                return
+        except jexc.JDSSException as err:
+            raise exception.VolumeBackendAPIException(err.message)
 
-        except exception.SnapshotIsBusy:
-            raise
-        except jexc.JDSSRESTException as err:
+        snapshots = self._clean_garbage_snapshots(vname, snapshots)
 
-            msg = _('Failed to delete snapshot %(snap) for volume %(vol)'
-                    'because of %(err).') % {
-                        'snap': snapshot['id'],
-                        'vol': snapshot['volume_id'],
-                        'err': err.message}
-
-            LOG.debug(msg)
-
-            raise exception.VolumeBackendAPIException(msg)
+        if len(snapshots) > 0:
+            self._hide_object(sname)
+        else:
+            self._gc_delete(sname)
 
     def local_path(self, volume):
         """Return local path to existing local volume.
@@ -455,9 +620,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param volume: reference of volume to be exported
         :return: iscsiadm-formatted provider location string
         """
-        LOG.debug("create_export for volume: %s.", volume["id"])
+        LOG.debug("create export for volume: %s.", volume["id"])
 
-        self._prepare_target_volume(volume, connector)
+        self._create_target_volume(volume, connector)
 
         return {'provider_location': self._get_provider_location(volume['id'])}
 
@@ -466,10 +631,8 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         :param volume: reference of volume to be exported
         """
-        LOG.debug("ensure_export for volume: %s.", volume['id'])
-        self._prepare_target_volume(volume, None)
-
-        return {'provider_location': self._get_provider_location(volume)}
+        LOG.debug("ensure export for volume: %s.", volume['id'])
+        self._ensure_target_volume(volume, None)
 
     def remove_export(self, _ctx, volume):
         """Destroy all resources created to export zvol.
@@ -527,7 +690,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             'location_info': location_info
         }
 
-        LOG.debug('Total capacity: %d,'
+        LOG.debug('Total capacity: %d, '
                   'Free %d.',
                   self._stats['total_capacity_gb'],
                   self._stats['free_capacity_gb'])
@@ -540,18 +703,16 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         """
         return self.ra.is_lun(volume_id)
 
-    def _create_new_target_volume(self, volume, target_name, connector=None):
-        """_create_new_target_volume.
+    def _create_target_volume(self, volume, connector):
+        """Creates target and attach volume to it
 
-        Creates new target with user properties for CHAP auth if specified,
-        attaches specified volume to it.
-
-        :param volume: volume
-        :param target_name: name of new target
-        :param connector: connector description
+        :param volume: volume id
+        :param connector: connector
         :return:
         """
-        LOG.debug("Create new target volume.")
+        LOG.debug("prepare target volume %s.", volume['id'])
+
+        target_name = self.jovian_target_prefix + volume["id"]
 
         auth = volume['provider_auth']
 
@@ -573,93 +734,88 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         except jexc.JDSSRESTException as ex:
 
-            msg = ('Unable to create target %(target)s '
-                   'because of %(error)s.'.format(target=target_name,
-                                                  error=ex.message))
+            msg = _('Unable to create target %(target)s '
+                    'because of %(error)s.') % {'target': target_name,
+                                                'error': ex.message}
 
             LOG.debug(msg, resource=volume)
 
             raise exception.VolumeBackendAPIException(data=msg)
 
         if use_chap:
-
             try:
                 self.ra.create_target_user(target_name,
                                            chap_cred)
 
             except jexc.JDSSRESTException as ex:
 
-                err_msg = ('Unable to create'
-                           ' user %(user)s for target %(target)s'
-                           ' because of %(error)s.'.format(
-                               target=target_name,
-                               user=chap_cred['name'],
-                               error=six.text_type(ex)))
+                err_msg = _('Unable to create user %(user)s '
+                            'for target %(target)s '
+                            'because of %(error)s.') % {
+                                'target': target_name,
+                                'user': chap_cred['name'],
+                                'error': six.text_type(ex)}
 
                 LOG.debug(err_msg)
 
                 raise exception.VolumeBackendAPIException(data=err_msg)
-
         try:
-            self.ra.attach_target_vol(
-                target_name,
-                volume["id"])
-
+            vname = jcom.vname(volume["id"])
+            self.ra.attach_target_vol(target_name, vname)
         except jexc.JDSSRESTException as ex:
 
-            err_msg = ('Unable to attach target %(target)s to'
-                       'volume %(volume)s because of %(error)s.'.format(
-                           target=target_name,
-                           volume=volume['id'],
-                           error=six.text_type(ex)))
+            err_msg = _('Unable to attach target %(target)s to '
+                        'volume %(volume)s because of %(error)s.') % {
+                'target': target_name,
+                'volume': volume['id'],
+                'error': six.text_type(ex)}
 
             LOG.debug(err_msg)
 
             raise exception.VolumeBackendAPIException(message=err_msg)
 
-    def _prepare_target_volume(self, volume, connector):
-        """_prepare_target_volume.
-
-        Makes sure that specified volume is connected to appropriate target.
-        Creates new target and attaches volume to it if necessary.
-        :param volume:
-        :param connector:
-        :return:
-        """
-        LOG.debug("Prepare target volume %s.", volume['id'])
+    def _ensure_target_volume(self, volume):
+    """Checks if target configured properly and volume is attached to it
+    
+    param: volume: volume structure
+    """
+        LOG.debug("prepare target volume %s.", volume['id'])
 
         target_name = self.jovian_target_prefix + volume["id"]
 
-        if self.ra.is_target(target_name) is True:
-            LOG.debug("Target %s exists.", target_name)
-            if self.ra.is_target_lun(target_name,
-                                     volume["id"])\
-                    is True:
+        auth = volume['provider_auth']
+
+        chap_cred = dict()
+        use_chap = False
+
+        if auth is not None:
+            (auth_method, auth_username, auth_secret) = auth.split()
+            chap_cred = {"name": auth_username,
+                         "password": auth_secret}
+            use_chap = True
+
+
+        if self.ra.is_target(target_name):
+            LOG.debug("target %s exists.", target_name)
+            if self.ra.is_target_lun(target_name, volume["id"]):
                 return
             else:
                 if self.ra.attach_target_vol(
                         target_name,
                         volume["id"]) is False:
 
-                    msg = ('Unable to attach volume %(vol)s to'
-                           ' target %(targ)s'.format(vol=volume[id],
-                                                     targ=target_name))
+                    msg = _('Unable to attach volume %(vol)s to'
+                            ' target %(targ)s') % {'vol': volume[id],
+                                                   'targ': target_name}
                     LOG.debug(msg)
 
                     raise exception.VolumeBackendAPIException(
                         message=msg)
 
-        else:
-            self._create_new_target_volume(volume, target_name)
-
-        return
-
     def _remove_target_volume(self, volume):
         """_remove_target_volume
 
         Ensure that volume is not attached to target and target do not exists.
-        :param volume:
-        :return:
         """
         target_name = self.jovian_target_prefix + volume['id']
         LOG.debug("Remove_export.")
@@ -673,11 +829,11 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             LOG.debug('Failed to Terminate_connection for target %(targ)s'
                       'because of: %(err)s', {
                           'targ': target_name,
-                          'err': str(ex.args[0])})
+                          'err': ex.args[0]})
         except jexc.JDSSRESTResourceNotFoundException as ex:
             LOG.debug('Failed to remove resource %(targ) because of %(err).', {
                 'targ': target_name,
-                'err': str(ex.args[0])})
+                'err': ex.args[0]})
 
         LOG.debug("Delete target: %s.", target_name)
 
@@ -687,12 +843,12 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             LOG.debug('Failed to Terminate_connection for target %(targ)s'
                       'because of: %(err)s', {
                           'targ': target_name,
-                          'err': str(ex.args[0])})
+                          'err': ex.args[0]})
 
         except jexc.JDSSRESTResourceNotFoundException as ex:
             LOG.debug('Failed to remove resource %(targ) because of %(err).', {
                 'targ': target_name,
-                'err': str(ex.args[0])})
+                'err': ex.args[0]})
         return
 
     def _get_iscsi_properties(self, volume, connector):
@@ -714,7 +870,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         iface_info = []
         multipath = connector.get('multipath', False)
-        if multipath is True:
+        if multipath:
             iface_info = self._get_active_ifaces()
             if not iface_info:
                 raise exception.InvalidConfigurationValue(
@@ -727,7 +883,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             iscsi_properties['target_iqns'] = []
             iscsi_properties['target_portals'] = []
             iscsi_properties['target_luns'] = []
-            LOG.debug('tpaths %s.', str(iface_info))
+            LOG.debug('tpaths %s.', iface_info)
             for iface in iface_info:
                 iscsi_properties['target_iqns'].append(
                     self.jovian_target_prefix +
@@ -790,8 +946,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             ip_settings['allow_ip'].append(connector['ip'])
             self.ra.set_target_ip_settings(target_name, ip_settings)
 
-        LOG.debug(""
-                  "providing connection info %s", str(iscsi_properties))
+        LOG.debug("providing connection info %s", iscsi_properties)
         return {
             'driver_volume_type': 'iscsi',
             'data': iscsi_properties,
@@ -800,7 +955,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     def terminate_connection(self, volume, connector, force=False, **kwargs):
         """terminate_connection
 
-        Disallow connection from connector by removing it's ip
+        Disallow connection from connector by removing its ip
         from allowed ip list.
         """
 
@@ -814,7 +969,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         if connector['ip'] in ip_settings['allow_ip']:
             ip_settings['allow_ip'].remove(connector['ip'])
 
-            LOG.debug("terminate_connection for %(volume)s %(ip)s."
+            LOG.debug("terminate_connection for %(volume)s %(ip)s "
                       "from ip list %(ip_list)s.",
                       {'volume': volume['id'],
                        'ip': connector['ip'],

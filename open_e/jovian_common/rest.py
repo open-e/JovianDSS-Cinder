@@ -15,6 +15,8 @@
 
 
 """REST cmd interoperation class for JovianDSS driver."""
+import re
+
 from oslo_log import log as logging
 
 from cinder import exception
@@ -32,6 +34,9 @@ class JovianRESTAPI(object):
         self.target_p = config.get('jovian_target_prefix')
         self.pool = config.safe_get('jovian_pool')
         self.rproxy = rest_proxy.JovianRESTProxy(config)
+
+        self.resource_dne_msg = (
+            re.compile(r'^Zfs resource: .* not found in this collection\.$'))
 
     def get_active_host(self):
         """Return address of currently used host."""
@@ -224,7 +229,64 @@ class JovianRESTAPI(object):
         else:
             raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def delete_lun(self, volume_name, recursively_children=False):
+    def modify_lun(self, volume_name, prop=None):
+
+        req = '/volumes/' + volume_name
+
+        resp = self.rproxy.pool_request('PUT', req, json_data=prop)
+
+        if ((resp["code"] == 200) or
+                (resp["code"] == 201) or
+                (resp["code"] == 204)):
+            LOG.debug(
+                "volume %s updated", volume_name)
+            return
+        raise  jexc.JDSSRESTResourceNotFoundException(volume_name)
+
+    def make_readonly_lun(self, volume_name):
+        """Set volume into read only mode
+        
+        :param: volume_name: volume name
+        """
+
+        prop = { "property_name":"readonly", "property_value":"on"}
+
+        self.modify_property_lun(volume_name, prop)
+
+
+    def modify_property_lun(self, volume_name, prop=None):
+        """Change volume properties
+
+        :prop: volume_name: volume name
+        :prop: prop: dictionary of volume properties in format
+                { "property_name": "<name of property>",
+                  "property_value":"<value of a property>"}
+        """
+
+        req = '/volumes/{}/roperties'.format(volume_name)
+
+        resp = self.rproxy.pool_request('PUT', req, json_data=prop)
+
+        if resp["code"] == 201:
+            LOG.debug(
+                "volume %s properties updated", volume_name)
+            return
+
+        if resp["code"] == 500:
+            if resp["error"] not None:
+                if resp["error"]["errno"] = 1:
+                    raise JDSSRESTResourceNotFoundExceptionn(
+                            res=volume_name)
+                msg = 'Failed to modify property of {}, err: {}'.format(
+                        volume_name, resp['error']['message'])
+                raise jexc.JDSSRESTException(request=req, 
+                                             reason=resp['error']['message'])
+        raise jexc.JDSSRESTException(request=req, reason="unknown")
+
+    def delete_lun(self, volume_name, 
+                        recursively_children=False,
+                        recursively_dependents=False,
+                        force_umount=False):
         """delete_volume.
 
         DELETE /volumes/<string:volumename>
@@ -234,19 +296,26 @@ class JovianRESTAPI(object):
         if not self.is_lun(volume_name):
             return
 
-        jbody = None
+        jbody = {}
         if recursively_children is True:
-            jbody = {
-                'recursively_children': recursively_children
-            }
+            jbody['recursively_children'] = True
+
+        if recursively_dependents is True:
+            jbody['recursively_dependents'] = True
+
+        if force_umount is True:
+            jbody['force_umount'] = True
 
         req = '/volumes/' + volume_name
         LOG.debug(("delete volume:%(vol)s "
-                   "recursively children:%(rc)s"),
+                   "recursively children:%(args)s"),
                   {'vol': volume_name,
-                   'rc': str(recursively_children)})
+                   'args': jbody})
 
-        resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
+        if len(jbody) > 0:
+            resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
+        else:
+            resp = self.rproxy.pool_request('DELETE', req)
 
         if ((resp["code"] == 200) or
                 (resp["code"] == 201) or
@@ -692,11 +761,20 @@ class JovianRESTAPI(object):
                 (resp["code"] == 204)):
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling of
-        # different error cases
+        if resp["code"] == 500:
+            if resp["error"] not None:
+                if resp["error"]["errno"] = 1:
+                    raise JDSSRESTVolumeDNEException(
+                            volume=volume_name)
+                if resp["error"]["errno"] = 5:
+                    raise JDSSRESTSnapshotExistsException(
+                            snapshot=snapshot_name)
+                msg = 'Failed to create snapshot {}, err: {}'.format(
+                        snapshot_name, resp['error']['message'])
+                raise jexc.JDSSRESTException(msg)
 
-        raise jexc.JDSSRESTException(
-            'Failed to create snapshot {}.'.format(resp['error']['message']))
+        msg = 'Failed to create snapshot {}'.format(snapshot_name)
+        raise jexc.JDSSRESTException(msg)
 
     def create_volume_from_snapshot(self, volume_name, snapshot_name,
                                     original_vol_name, **options):
@@ -730,6 +808,15 @@ class JovianRESTAPI(object):
                 (resp["code"] == 201) or
                 (resp["code"] == 204)):
             return
+
+        if resp["code"] == 500:
+            if resp["error"] not None:
+                if resp["error"]["errno"] = 100:
+                    raise JDSSRESTVolumeExistsException(
+                            volume=volume_name)
+                args = {"vol": volume_name, "e": resp['error']['message']}
+                msg = _('Failed to create volume %(vol)s, err: %(e)s') % args
+                raise jexc.JDSSRESTException(msg)
 
         raise jexc.JDSSRESTException('unable to create volume')
 
@@ -809,7 +896,17 @@ class JovianRESTAPI(object):
                 (resp["code"] == 204)):
             LOG.debug("snapshot %s deleted", snapshot_name)
             return
-        # TODO(andrei.perepiolkin@open-e.com): analise error
+
+        if resp["code"] == 500:
+            if resp["error"] not None:
+                if resp["error"]["errno"] = 1000:
+                    raise JDSSRESTSnapshotIsBusyException(
+                            snapshot=snapshot_name)
+                msg = 'Failed to delete snapshot {}, err: {}'.format(
+                        snapshot_name, resp['error']['message'])
+                raise jexc.JDSSRESTException(msg)
+        msg = 'Failed to delete snapshot {}'.format(snapshot_name)
+        raise jexc.JDSSRESTException(msg)
         raise exception.SnapshotIsBusy(snapshot_name=snapshot_name)
 
     def get_snapshots(self, volume_name):
@@ -853,6 +950,10 @@ class JovianRESTAPI(object):
         if resp["error"] is None and resp["code"] == 200:
             return resp["data"]
 
+        if resp['code'] == 500:
+           if 'message' in resp:
+               if self.resource_dne_msg.match(resp['message']): 
+                   raise exc.JDSSRESTResourceNotFoundException(volume_name)
         raise jexc.JDSSRESTException('unable to get snapshots')
 
     def get_pool_stats(self):

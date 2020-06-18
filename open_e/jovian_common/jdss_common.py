@@ -16,10 +16,62 @@
 """Common resources for JovianDSS driver."""
 max_volume_name_size = 96
 
+def vname(name):
+    """Convert id into volume name"""
+
+    if name[:2] == 'v_':
+        return name
+    
+    if name[:2] == 's_':
+        msg = _('Attempt to use snapshot %s as a volume') % name
+        raise exception.VolumeBackendAPIException(message=msg)
+
+    if name[:2] == 't_':
+        msg = _('Attempt to use deleted object %s as a volume') % name
+        raise exception.VolumeBackendAPIException(message=msg)
+
+    return 'v_' + name
+
+def sname(name):
+    """Convert id into snapshot name"""
+
+    if name[:2] == 's_':
+        return name
+
+    if name[:2] == 'v_':
+        msg = _('Attempt to use volume %s as a snapshot') % name
+        raise exception.VolumeBackendAPIException(message=msg)
+
+    if name[:2] == 't_':
+        msg = _('Attempt to use deleted object %s as a snapshot') % name
+        raise exception.VolumeBackendAPIException(message=msg)
+
+    return 's_' + name
+
+def is_hidden(name):
+    """Check if object is active or no"""
+
+    if len(name) < 2:
+        return False
+    if name[:2] == 't_':
+        return True
+    return False
 
 def origin_snapshot(origin_str):
+    """Extracts original phisical snapshot name from origin record"""
+
     return origin_str.split("@")[1]
 
-
 def origin_volume(pool, origin_str):
+    """Extracts original phisical volume name from origin record"""
+
     return origin_str.split("@")[0].split(pool + "/")[1]
+
+def full_name_volume(name):
+    return name.split('/')[1]
+
+def hidden(name):
+    if len(name) < 2:
+        return ''
+    if name[:2] == 'v_' || name[:2] == 's_':
+        return 't_' + name[2:]
