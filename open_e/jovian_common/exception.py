@@ -29,7 +29,10 @@ class JDSSRESTProxyException(JDSSException):
     message = _("JDSS connection with %(host)s failed: %(reason)s.")
 
 
-class JDSSRESTResourceNotFoundException(JDSSException):
+class JDSSResourceNotFoundException(JDSSException):
+    message = _("JDSS resource %(res)s DNE.")
+
+class JDSSResourceExistsException(JDSSException):
     message = _("JDSS resource %(res)s DNE.")
 
 class JDSSRESTVolumeDNEException(JDSSException):

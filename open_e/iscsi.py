@@ -297,9 +297,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         try:
             snapshots = self.ra.get_snapshots(vname)
         except jexc.JDSSRESTResourceNotFoundException:
-                LOG.debug('volume %s dne, it was already'
-                    'deleted.', vname)
-                return
+            LOG.debug('volume %s dne, it was already'
+                'deleted.', vname)
+            return
         except jexc.JDSSException as err:
             raise exception.VolumeBackendAPIException(err.message)
 
@@ -326,9 +326,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         try:
             vol = self.ra.get_volume(vname)
         except jexc.JDSSRESTResourceNotFoundException:
-                LOG.debug('Volume %s does not exist, it was already'
-                    'deleted.', vname)
-                return
+            LOG.debug('Volume %s does not exist, it was already'
+                'deleted.', vname)
+            return
         except jexc.JDSSException as err:
             raise exception.VolumeBackendAPIException(err.message)
 
@@ -466,7 +466,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 coname,
                 sparse=self.jovian_sparse)
         except jexc.JDSSRESTVolumeExistsException as err:
-                raise exception.Duplicate()
+            raise exception.Duplicate()
         except jexc.JDSSException as err:
             try:
                 self.ra.delete_snapshot(oname, coname)
@@ -703,51 +703,71 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         """
         return self.ra.is_lun(volume_id)
 
-    def _create_target_volume(self, volume, connector):
-        """Creates target and attach volume to it
-
-        :param volume: volume id
-        :param connector: connector
-        :return:
+    def _create_target(self, target_name, use_chap=True):
+        """Creates target and handles exceptions
+        
+        Tryes to create target.
+        :param target_name: name of target
+        :param use_chap: flag for using chap
         """
-        LOG.debug("prepare target volume %s.", volume['id'])
-
-        target_name = self.jovian_target_prefix + volume["id"]
-
-        auth = volume['provider_auth']
-
-        chap_cred = dict()
-        use_chap = False
-
-        if auth is not None:
-            (auth_method, auth_username, auth_secret) = auth.split()
-            chap_cred = {"name": auth_username,
-                         "password": auth_secret}
-            use_chap = True
-
-        # Deny all connections by default
-        deny_ip_list = []
         try:
             self.ra.create_target(target_name,
-                                  use_chap=use_chap,
-                                  deny_ip=deny_ip_list)
+                                  use_chap=use_chap)
 
+        except jexc.JDSSResourceExistsException:
+            raise exception.VolumeBackendAPIException("target alrteady exists")
         except jexc.JDSSRESTException as ex:
 
             msg = _('Unable to create target %(target)s '
                     'because of %(error)s.') % {'target': target_name,
                                                 'error': ex.message}
-
-            LOG.debug(msg, resource=volume)
-
             raise exception.VolumeBackendAPIException(data=msg)
 
+    def _attach_target(self, target_name, vname, vid):
+        """Attach target to volume and handles exceptions
+        
+        Tryes to set attach volume to specific target.
+        In case of failure will remve target. 
+        :param target_name: name of target
+        :param use_chap: flag for using chap
+        """
+        try:
+            vname = jcom.vname(volume["id"])
+            self.ra.attach_target_vol(target_name, vname)
+        except jexc.JDSSRESTException as ex:
+            try:
+                self.ra.delete_target(target_name)
+            except jexc.JDSSException as ex:
+                pass
+
+            err_msg = _('Unable to attach target %(target)s to '
+                        'volume %(volume)s because of %(error)s.') % {
+                'target': target_name,
+                'volume': vid,
+                'error': six.text_type(ex)}
+
+            LOG.debug(err_msg)
+
+            raise exception.VolumeBackendAPIException(message=err_msg)
+
+    def _set_target_credentials(self, target_name, cred):
+        """Set CHAP configuration for target and handle exceptions
+        
+        Tryes to set CHAP credentials for specific target.
+        In case of failure will remve target. 
+        :param target_name: name of target
+        :param cred: CHAP user name and password
+        """
         if use_chap:
             try:
                 self.ra.create_target_user(target_name,
                                            chap_cred)
 
             except jexc.JDSSRESTException as ex:
+                try:
+                    self.ra.delete_target(target_name)
+                except jexc.JDSSException as ex:
+                    pass
 
                 err_msg = _('Unable to create user %(user)s '
                             'for target %(target)s '
@@ -759,58 +779,81 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 LOG.debug(err_msg)
 
                 raise exception.VolumeBackendAPIException(data=err_msg)
-        try:
-            vname = jcom.vname(volume["id"])
-            self.ra.attach_target_vol(target_name, vname)
-        except jexc.JDSSRESTException as ex:
 
-            err_msg = _('Unable to attach target %(target)s to '
-                        'volume %(volume)s because of %(error)s.') % {
-                'target': target_name,
-                'volume': volume['id'],
-                'error': six.text_type(ex)}
+    def _create_target_volume(self, volume, connector):
+        """Creates target and attach volume to it
 
-            LOG.debug(err_msg)
+        :param volume: volume id
+        :param connector: connector
+        :return:
+        """
+        LOG.debug("create target and attach volume %s to it", volume['id'])
 
-            raise exception.VolumeBackendAPIException(message=err_msg)
+        target_name = self.jovian_target_prefix + volume["id"]
+
+        auth = volume['provider_auth']
+
+        if auth is None:
+            msg = _("Volume %s is missing provider_auth") % volume['id']
+            raise exception.VolumeDriverException("") 
+
+        (auth_method, auth_username, auth_secret) = auth.split()
+        chap_cred = {"name": auth_username,
+                     "password": auth_secret}
+
+        # Create target
+        self._create_target(target_name, use_chap)
+
+        # Attach volume 
+        self._attach_target_volume(target_name, vname, volume['id'])
+
+        # Set credentials
+        self._set_target_credentials(target_name, chap_cred)
 
     def _ensure_target_volume(self, volume):
     """Checks if target configured properly and volume is attached to it
     
     param: volume: volume structure
     """
-        LOG.debug("prepare target volume %s.", volume['id'])
+        LOG.debug("ensure volume %s assigned to a proper target", volume['id'])
 
         target_name = self.jovian_target_prefix + volume["id"]
 
         auth = volume['provider_auth']
 
-        chap_cred = dict()
-        use_chap = False
+        if auth is None:
+            msg = _("Volume %s is missing provider_auth") % volume['id']
+            raise exception.VolumeDriverException("") 
 
-        if auth is not None:
-            (auth_method, auth_username, auth_secret) = auth.split()
-            chap_cred = {"name": auth_username,
-                         "password": auth_secret}
-            use_chap = True
+        (auth_method, auth_username, auth_secret) = auth.split()
+        chap_cred = {"name": auth_username,
+                     "password": auth_secret}
+        use_chap = True
 
+        if not self.ra.is_target(target_name):
+            self._create_target(target_name, use_chap)
 
-        if self.ra.is_target(target_name):
-            LOG.debug("target %s exists.", target_name)
-            if self.ra.is_target_lun(target_name, volume["id"]):
-                return
-            else:
-                if self.ra.attach_target_vol(
+        if not self.ra.is_target_lun(target_name, volume["id"]):
+            self._attach_target_volume(target_name, vname, volume['id'])
+
+        try:
+            users = self.ra.get_target_user(target_name)
+            if len(users) == 1:
+                if users[0]['name'] == chap_cred['name']:
+                    return
+                else:
+                    self.ra.delete_target_user(
+                            target_name,
+                            users[0]['name'])
+            for u in users:
+                self.ra.delete_target_user(
                         target_name,
-                        volume["id"]) is False:
+                        u['name'])
+            self._set_target_credentials(target_name, chap_cred)
 
-                    msg = _('Unable to attach volume %(vol)s to'
-                            ' target %(targ)s') % {'vol': volume[id],
-                                                   'targ': target_name}
-                    LOG.debug(msg)
-
-                    raise exception.VolumeBackendAPIException(
-                        message=msg)
+        except jcom.JDSSException as err:        
+            self.ra.delete_target(target_name)
+            raise exception.VolumeBackendAPIException(err.message)
 
     def _remove_target_volume(self, volume):
         """_remove_target_volume
@@ -942,9 +985,16 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                    'ip': connector['ip'],
                    'ip_list': str(ip_settings['allow_ip'])})
 
-        if connector['ip'] not in ip_settings['allow_ip']:
-            ip_settings['allow_ip'].append(connector['ip'])
-            self.ra.set_target_ip_settings(target_name, ip_settings)
+        try:
+            self.ra.activate_target(target_name)
+        except jexc.JDSSRESTException as ex:
+
+            err_msg = _('Unable to activate target %(target)s') % {
+                'target': target_name}
+
+            LOG.debug(err_msg)
+
+            raise exception.VolumeBackendAPIException(message=err_msg)
 
         LOG.debug("providing connection info %s", iscsi_properties)
         return {
@@ -961,21 +1011,19 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         target_name = self.jovian_target_prefix + volume["id"]
 
-        if not self.ra.is_target(target_name):
-            return
+        try:
+           self.ra.deactivate_target(target_name)
+        except jexc.JDSSResourceNotFoundException as ex:
+           err_msg = _('target %s do not exists') % target_name
+           LOG.debug(err_msg)
+           raise exception.VolumeBackendAPIException(message=err_msg)
 
-        ip_settings = self.ra.get_target_ip_settings(target_name)
+        except jexc.JDSSException as ex:
+           err_msg = _('Unable to deactivate target %(target)s') % {
+               'target': target_name}
+           LOG.debug(err_msg)
+           raise exception.VolumeBackendAPIException(message=err_msg)
 
-        if connector['ip'] in ip_settings['allow_ip']:
-            ip_settings['allow_ip'].remove(connector['ip'])
-
-            LOG.debug("terminate_connection for %(volume)s %(ip)s "
-                      "from ip list %(ip_list)s.",
-                      {'volume': volume['id'],
-                       'ip': connector['ip'],
-                       'ip_list': str(ip_settings['allow_ip'])})
-
-            self.ra.set_target_ip_settings(target_name, ip_settings)
         return
 
     def attach_volume(self,

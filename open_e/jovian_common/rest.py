@@ -426,7 +426,7 @@ class JovianRESTAPI(object):
 
         LOG.debug("create target %s", target_name)
 
-        jdata = {"name": target_name}
+        jdata = {"name": target_name, "active": False}
 
         jdata["incoming_users_active"] = use_chap
 
@@ -469,11 +469,10 @@ class JovianRESTAPI(object):
 
         if (resp["code"] == 404) or \
                 (resp["error"]["class"] == "werkzeug.exceptions.NotFound"):
-            LOG.debug("target %s not found, exiting as success", target_name)
-            return
+            raise jexc.JDSSRESTResourceNotFoundException(res=target_name)
 
-        raise jexc.JDSSRESTException(reason='Failed to delete target.',
-                                     request=req)
+        msg = 'Failed to delete target %s'.format(target_name) 
+        raise jexc.JDSSRESTException(reason=msg, request=req)
 
     def modify_target(self, target_name, **kwargs):
         """modify_target.
@@ -604,7 +603,7 @@ class JovianRESTAPI(object):
         return
 
     def create_target_user(self, target_name, chap_cred):
-        """create_target_user.
+        """Set CHAP credentials for accees specific target.
 
         POST
         /san/iscsi/targets/<target_name>/incoming-users
@@ -629,9 +628,59 @@ class JovianRESTAPI(object):
                  resp["code"] == 204):
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling
-        # of different error cases
+        if resp['code'] = 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
         msg = 'Failed to set target user {}.'.format(resp['error']['message'])
+        raise jexc.JDSSRESTException(reason=msg, request=req)
+
+    def get_target_user(self, target_name):
+        """Get name of CHAP user for accessing target
+
+        GET
+        /san/iscsi/targets/<target_name>/incoming-users
+
+        :param target_name:
+        """
+        req = '/san/iscsi/targets/' + target_name + "/incoming-users"
+
+        LOG.debug("get chap cred for target %s", target_name)
+
+        resp = self.rproxy.pool_request('GET', req, json_data=chap_cred)
+
+        if resp["error"] is None and resp["code"] == 200:
+            return resp['data']
+
+        if resp['code'] = 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
+        msg = 'Failed to get target user {}.'.format(resp['error']['message'])
+        raise jexc.JDSSRESTException(reason=msg, request=req)
+
+    def delete_target_user(self, target_name, user_name):
+        """Delete CHAP user for target
+
+        DELETE
+        /san/iscsi/targets/<target_name>/incoming-users/<user_name>
+
+        :param target_name: target name
+        :param user_name: user name
+        """
+        req = '/san/iscsi/targets/{0}/incoming-users/{1}'.format(
+                target_name, user_name)
+
+        LOG.debug("remove credentails from target %s", target_name)
+
+        resp = self.rproxy.pool_request('DELETE', req, json_data=chap_cred)
+
+        if resp["error"] is None and resp["code"] == 204:
+            return
+
+        if resp['code'] = 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
+        msg = 'Failed to delete target user {}.'.format(
+                resp['error']['message'])
         raise jexc.JDSSRESTException(reason=msg, request=req)
 
     def is_target_lun(self, target_name, lun_name):
@@ -699,6 +748,52 @@ class JovianRESTAPI(object):
         raise jexc.JDSSRESTException(
             'Failed to attach volume {}.'.format(resp['error']['message']))
 
+    def activate_target(self, target_name):
+    """Set activate flag for target as True
+
+    :param target_name: target name
+    """
+        req = '/san/iscsi/targets/{}'.format(target_name)
+
+        LOG.debug("activate target %s", target_name)
+
+        jdata = {"active": True}
+
+        resp = self.rproxy.pool_request('PUT', req, json_data=jdata)
+
+        if resp["error"] is None and resp["code"] == 200:
+            return
+
+        if resp['code'] == 404:
+            raise jexc.JDSSRESTResourceNotFoundException(res=target_name)
+
+        msg = 'Failed to activate target {} because {}.'.format(
+                target_name, resp['error']['message'])
+        raise jexc.JDSSRESTException(reason=msg, request=req)
+
+    def deactivate_target(self, target):
+    """Set activate flag for target as False
+
+    :param target_name: target name
+    """
+        req = '/san/iscsi/targets/{}'.format(target_name)
+
+        LOG.debug("deactivate target %s", target_name)
+
+        jdata = {"active": False}
+
+        resp = self.rproxy.pool_request('PUT', req, json_data=jdata)
+
+        if resp["error"] is None and resp["code"] == 200:
+            return
+
+        if resp['code'] == 404:
+            raise jexc.JDSSRESTResourceNotFoundException(res=target_name)
+
+        msg = 'Failed to activate target {} because {}.'.format(
+                target_name, resp['error']['message'])
+        raise jexc.JDSSRESTException(reason=msg, request=req)
+ 
     def detach_target_vol(self, target_name, lun_name):
         """detach_target_vol.
 
