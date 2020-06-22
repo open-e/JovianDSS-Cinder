@@ -45,8 +45,8 @@ jdss_connection_opts = [
 ]
 
 jdss_iscsi_opts = [
-    cfg.IntOpt('jovian_iscsi_target_portal_port',
-               default=3260,
+    cfg.StrOpt('jovian_iscsi_target_portal_port',
+               default='3260',
                help='Open-E JovianDSS target portal port'),
     cfg.StrOpt('jovian_pool',
                default='Cinder-Pool-0',
@@ -54,9 +54,9 @@ jdss_iscsi_opts = [
     cfg.StrOpt('jovian_target_prefix',
                default='iqn.2016-04.com.open-e.cinder:',
                help='IQN prefix for iSCSI targets'),
-    cfg.StrOpt('jovian_target_group_prefix',
-               default='cinder/',
-               help='Prefix for iSCSI target groups on Open-E JovianDSS SA'),
+    #cfg.StrOpt('jovian_target_group_prefix',
+    #           default='cinder/',
+    #           help='Prefix for iSCSI target groups on Open-E JovianDSS SA'),
     #cfg.BoolOpt('jovian_chap_auth',
     #            default=False,
     #            help='Use CHAP authentication.'),
