@@ -18,32 +18,48 @@ from cinder.i18n import _
 
 
 class JDSSException(exception.VolumeDriverException):
+    """Unknown error"""
     message = _("%(reason)s")
 
 
 class JDSSRESTException(JDSSException):
+    """Unknown communication error"""
+
     message = _("JDSS REST request %(request)s faild: %(reason)s.")
 
 
 class JDSSRESTProxyException(JDSSException):
+    """Connection with host failed"""
+
     message = _("JDSS connection with %(host)s failed: %(reason)s.")
 
 
 class JDSSResourceNotFoundException(JDSSException):
+    """Unable to locate resource with specified id"""
+
     message = _("JDSS resource %(res)s DNE.")
 
 class JDSSResourceExistsException(JDSSException):
+    """Resource with specified id exists"""
+
     message = _("JDSS resource %(res)s DNE.")
 
 class JDSSRESTVolumeDNEException(JDSSException):
+    """Volume does not exist"""
+
     message = _("JDSS volume %(volume)s DNE.")
 
 class JDSSRESTSnapshotExistsException(JDSSException):
+    """Snapshot with the same id exists"""
+
     message = _("JDSS snapshot %(snapshot)s already exists.")
 
 class JDSSRESTVolumeExistsException(JDSSException):
+    """Volume with same id exists"""
+
     message = _("JDSS volume %(volume)s already exists.")
 
 class JDSSRESTSnapshotIsBusyException(JDSSException):
-    message = _("JDSS snapshot %(snapshot)s already exists.")
+    """Snapshot have dependent clones"""
 
+    message = _("JDSS snapshot %(snapshot)s already exists.")
