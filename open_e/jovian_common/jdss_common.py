@@ -13,15 +13,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Common resources for JovianDSS driver."""
-max_volume_name_size = 96
+from cinder import exception
+from cinder.i18n import _
+
 
 def vname(name):
     """Convert id into volume name"""
 
     if name[:2] == 'v_':
         return name
-    
+
     if name[:2] == 's_':
         msg = _('Attempt to use snapshot %s as a volume') % name
         raise exception.VolumeBackendAPIException(message=msg)
@@ -31,6 +32,7 @@ def vname(name):
         raise exception.VolumeBackendAPIException(message=msg)
 
     return 'v_' + name
+
 
 def sname(name):
     """Convert id into snapshot name"""
@@ -48,6 +50,7 @@ def sname(name):
 
     return 's_' + name
 
+
 def is_hidden(name):
     """Check if object is active or no"""
 
@@ -57,21 +60,30 @@ def is_hidden(name):
         return True
     return False
 
+
 def origin_snapshot(origin_str):
     """Extracts original phisical snapshot name from origin record"""
 
     return origin_str.split("@")[1]
+
 
 def origin_volume(pool, origin_str):
     """Extracts original phisical volume name from origin record"""
 
     return origin_str.split("@")[0].split(pool + "/")[1]
 
+
 def full_name_volume(name):
+    """Get volume id from full_name"""
+
     return name.split('/')[1]
 
+
 def hidden(name):
+    """Get hidden version of a name"""
+
     if len(name) < 2:
-        return ''
-    if name[:2] == 'v_' || name[:2] == 's_':
+        raise exception.VolumeDriverException("Incorrect volume name")
+
+    if name[:2] == 'v_' or name[:2] == 's_':
         return 't_' + name[2:]

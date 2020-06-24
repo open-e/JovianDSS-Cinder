@@ -198,7 +198,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
 
         for snap in o_snaps:
             if 's_' in snap['name']:
-                vsnaps += [(snap['name'], 
+                vsnaps += [(snap['name'],
                             jcom.full_name_volume(snap['clones']))]
 
         active_vsnaps = [vs for vs in vsnaps if jcom.is_hidden(vs[1]) is False]
@@ -428,10 +428,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                 raise exception.VolumeBackendAPIException(
                     _("Unable to create volume %s.") % coname)
 
-        #if extend:
-        #    if src_vref['size'] < volume['size']:
-        #        self.extend_volume(volume, int(volume['size']))
-
     def create_cloned_volume(self, volume, src_vref):
         """Create a clone of the specified volume.
 
@@ -598,7 +594,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     def _update_volume_stats(self):
         """Retrieve stats info."""
         LOG.debug('Updating volume stats')
-
 
         pool_stats = self.ra.get_pool_stats()
         total_capacity = math.floor(int(pool_stats["size"]) / o_units.Gi)
@@ -835,16 +830,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         :param volume:
         :return:
         """
-        vname = volume["id"]
-
-        zvol_info = self.ra.get_zvol_info(vname)
-        if zvol_info is None:
-            LOG.debug('Unable to get zvol lun for'
-                      ' volume %s.', vname)
-
-            raise exception.VolumeBackendAPIException(
-                'Unable to get'
-                ' zvolume lun for volume {}.'.format(vname))
+        vname = jcom.vname(volume["id"])
 
         iface_info = []
         multipath = connector.get('multipath', False)
@@ -870,7 +856,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                     iface +
                     ":" +
                     self.jovian_iscsi_target_portal_port)
-                iscsi_properties['target_luns'].append(int(zvol_info["lun"]))
+                iscsi_properties['target_luns'].append(0)
         else:
             iscsi_properties['target_iqn'] = self.jovian_target_prefix + vname
             iscsi_properties['target_portal'] = (
@@ -888,7 +874,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             iscsi_properties['auth_username'] = auth_username
             iscsi_properties['auth_password'] = auth_secret
 
-        iscsi_properties['target_lun'] = int(zvol_info["lun"])
+        iscsi_properties['target_lun'] = 0
         return iscsi_properties
 
     def initialize_connection(self, volume, connector):

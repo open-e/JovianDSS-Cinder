@@ -18,9 +18,9 @@
 import json
 import time
 
+import requests
 from oslo_log import log as logging
 from oslo_utils import netutils as o_netutils
-import requests
 
 from cinder import exception
 from cinder.i18n import _
@@ -67,10 +67,10 @@ class JovianRESTProxy(object):
 
     def _get_pool_url(self, host):
         url = ('%(proto)s://%(host)s:%(port)s/api/v3/pools/%(pool)s' % {
-               'proto': self.proto,
-               'host': host,
-               'port': self.port,
-               'pool': self.pool})
+            'proto': self.proto,
+            'host': host,
+            'port': self.port,
+            'pool': self.pool})
         return url
 
     def _get_url(self, host):
@@ -87,7 +87,7 @@ class JovianRESTProxy(object):
         :param url: where to send
         :param json_data: data
         """
-        for i in range(int(str(self.retry_n))):
+        for j in range(int(str(self.retry_n))):
             for i in range(len(self.hosts)):
                 host = self.hosts[self.active_host]
                 url = self._get_url(host) + req
@@ -97,7 +97,7 @@ class JovianRESTProxy(object):
                     attempt: %(num)s.",
                     {'type': request_method,
                      'url': url,
-                     'num': i})
+                     'num': j})
 
                 if json_data is not None:
                     LOG.debug(
@@ -117,7 +117,7 @@ class JovianRESTProxy(object):
                     continue
             time.sleep(self.delay)
 
-        msg = (_('%(times) faild in a row') % {'times': i})
+        msg = (_('%(times) faild in a row') % {'times': j})
 
         raise jexc.JDSSRESTProxyException(host=url, reason=msg)
 
@@ -129,7 +129,7 @@ class JovianRESTProxy(object):
         :param json_data: data
         """
         url = ""
-        for i in range(int(str(self.retry_n))):
+        for j in range(int(str(self.retry_n))):
             for i in range(len(self.hosts)):
                 host = self.hosts[self.active_host]
                 url = self._get_pool_url(host) + req
@@ -139,7 +139,7 @@ class JovianRESTProxy(object):
                     attempt: %(num)s.",
                     {'type': request_method,
                      'url': url,
-                     'num': i})
+                     'num': j})
 
                 if json_data is not None:
                     LOG.debug(
@@ -159,7 +159,7 @@ class JovianRESTProxy(object):
                     continue
             time.sleep(int(self.delay))
 
-        msg = (_('%(times) faild in a row') % {'times': i})
+        msg = (_('%(times) faild in a row') % {'times': j})
 
         raise jexc.JDSSRESTProxyException(host=url, reason=msg)
 
@@ -198,7 +198,7 @@ class JovianRESTProxy(object):
                                 ("class" in ret["error"]):
                             if (ret["error"]["errno"] == 2) and\
                                     (ret["error"]["class"] ==
-                                        "exceptions.OSError"):
+                                     "exceptions.OSError"):
                                 LOG.debug(
                                     "Internal JDSS error retrying!")
                                 continue
@@ -207,7 +207,6 @@ class JovianRESTProxy(object):
             except requests.HTTPError as err:
                 LOG.debug("HTTP parsing error %s", err)
                 self.active_host = (self.active_host + 1) % len(self.hosts)
-                pass
 
         return ret
 

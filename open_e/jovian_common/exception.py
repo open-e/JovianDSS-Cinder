@@ -39,25 +39,30 @@ class JDSSResourceNotFoundException(JDSSException):
 
     message = _("JDSS resource %(res)s DNE.")
 
+
 class JDSSResourceExistsException(JDSSException):
     """Resource with specified id exists"""
 
     message = _("JDSS resource %(res)s DNE.")
+
 
 class JDSSRESTVolumeDNEException(JDSSException):
     """Volume does not exist"""
 
     message = _("JDSS volume %(volume)s DNE.")
 
+
 class JDSSRESTSnapshotExistsException(JDSSException):
     """Snapshot with the same id exists"""
 
     message = _("JDSS snapshot %(snapshot)s already exists.")
 
+
 class JDSSRESTVolumeExistsException(JDSSException):
     """Volume with same id exists"""
 
     message = _("JDSS volume %(volume)s already exists.")
+
 
 class JDSSRESTSnapshotIsBusyException(JDSSException):
     """Snapshot have dependent clones"""
