@@ -67,10 +67,10 @@ def origin_snapshot(origin_str):
     return origin_str.split("@")[1]
 
 
-def origin_volume(pool, origin_str):
+def origin_volume(origin_str):
     """Extracts original phisical volume name from origin record"""
 
-    return origin_str.split("@")[0].split(pool + "/")[1]
+    return origin_str.split("@")[0].split("/")[1]
 
 
 def full_name_volume(name):

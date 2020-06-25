@@ -18,6 +18,7 @@
 import json
 import time
 
+import urllib3
 import requests
 from oslo_log import log as logging
 from oslo_utils import netutils as o_netutils
@@ -64,6 +65,7 @@ class JovianRESTProxy(object):
         self.header = {'connection': 'keep-alive',
                        'Content-Type': 'application/json',
                        'authorization': 'Basic '}
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _get_pool_url(self, host):
         url = ('%(proto)s://%(host)s:%(port)s/api/v3/pools/%(pool)s' % {

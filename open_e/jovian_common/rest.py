@@ -246,7 +246,7 @@ class JovianRESTAPI(object):
             LOG.debug(
                 "volume %s updated", volume_name)
             return
-        raise jexc.JDSSRESTResourceNotFoundException(volume_name)
+        raise jexc.JDSSResourceNotFoundException(volume_name)
 
     def make_readonly_lun(self, volume_name):
         """Set volume into read only mode
@@ -266,7 +266,7 @@ class JovianRESTAPI(object):
                   "property_value":"<value of a property>"}
         """
 
-        req = '/volumes/{}/roperties'.format(volume_name)
+        req = '/volumes/{}/properties'.format(volume_name)
 
         resp = self.rproxy.pool_request('PUT', req, json_data=prop)
 
@@ -278,7 +278,7 @@ class JovianRESTAPI(object):
         if resp["code"] == 500:
             if resp["error"] is not None:
                 if resp["error"]["errno"] == 1:
-                    raise jexc.JDSSRESTResourceNotFoundExceptionn(
+                    raise jexc.JDSSResourceNotFoundExceptionn(
                         res=volume_name)
                 raise jexc.JDSSRESTException(request=req,
                                              reason=resp['error']['message'])
@@ -435,7 +435,7 @@ class JovianRESTAPI(object):
 
         if (resp["code"] == 404) or \
                 (resp["error"]["class"] == "werkzeug.exceptions.NotFound"):
-            raise jexc.JDSSRESTResourceNotFoundException(res=target_name)
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
 
         msg = 'Failed to delete target {}'.format(target_name)
         raise jexc.JDSSRESTException(reason=msg, request=req)
@@ -693,7 +693,7 @@ class JovianRESTAPI(object):
         """
         req = '/san/iscsi/targets/' + target_name + "/luns"
 
-        jbody = {"name": lun_name, "lun": str(lun_id)}
+        jbody = {"name": lun_name, "lun": lun_id}
         LOG.debug("atach volume %(vol)s to target %(tar)s",
                   {'vol': lun_name,
                    'tar': target_name})
@@ -729,7 +729,7 @@ class JovianRESTAPI(object):
             return
 
         if resp['code'] == 404:
-            raise jexc.JDSSRESTResourceNotFoundException(res=target_name)
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
 
         msg = 'Failed to activate target {} because {}.'.format(
             target_name, resp['error']['message'])
@@ -752,7 +752,7 @@ class JovianRESTAPI(object):
             return
 
         if resp['code'] == 404:
-            raise jexc.JDSSRESTResourceNotFoundException(res=target)
+            raise jexc.JDSSResourceNotFoundException(res=target)
 
         msg = 'Failed to activate target {} because {}.'.format(
             target, resp['error']['message'])
@@ -769,14 +769,14 @@ class JovianRESTAPI(object):
         """
         req = '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
 
-        if not self.is_target_lun(target_name, lun_name):
-            return
-
         LOG.debug("detach volume %(vol)s from target %(tar)s",
                   {'vol': lun_name,
                    'tar': target_name})
 
         resp = self.rproxy.pool_request('DELETE', req)
+
+        if resp['code'] == 404:
+            raise jexc.JDSSResourceNotFoundException(res=lun_name)
 
         if resp["code"] == 500 and \
                 resp["error"]["class"] == \
@@ -1005,12 +1005,12 @@ class JovianRESTAPI(object):
         resp = self.rproxy.pool_request('GET', req)
 
         if resp["error"] is None and resp["code"] == 200:
-            return resp["data"]
+            return resp["data"]["entries"]
 
         if resp['code'] == 500:
             if 'message' in resp:
                 if self.resource_dne_msg.match(resp['message']):
-                    raise jexc.JDSSRESTResourceNotFoundException(volume_name)
+                    raise jexc.JDSSResourceNotFoundException(volume_name)
         raise jexc.JDSSRESTException('unable to get snapshots')
 
     def get_pool_stats(self):
