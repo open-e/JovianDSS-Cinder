@@ -1008,8 +1008,8 @@ class JovianRESTAPI(object):
             return resp["data"]["entries"]
 
         if resp['code'] == 500:
-            if 'message' in resp:
-                if self.resource_dne_msg.match(resp['message']):
+            if 'message' in resp['error']:
+                if self.resource_dne_msg.match(resp['error']['message']):
                     raise jexc.JDSSResourceNotFoundException(volume_name)
         raise jexc.JDSSRESTException('unable to get snapshots')
 

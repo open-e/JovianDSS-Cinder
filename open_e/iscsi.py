@@ -172,6 +172,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
     def _clean_garbage_snapshots(self, vname, snapshots):
         """Delete physical snapshots that have no descendents"""
         garbage = []
+        LOG.debug("clean_garbage_snapshots-----" + str(snapshots))
         for snap in snapshots:
             if snap['clones'] == '':
                 try:
@@ -928,6 +929,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         from allowed ip list.
         """
 
+        LOG.debug("terminate connection for %(volume)s ",
+                  {'volume': volume['id']})
+
         target_name = self.jovian_target_prefix + volume["id"]
 
         try:
@@ -935,7 +939,6 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         except jexc.JDSSResourceNotFoundException:
             err_msg = _('target %s do not exists') % target_name
             LOG.debug(err_msg)
-            raise exception.VolumeBackendAPIException(message=err_msg)
 
         except jexc.JDSSException as ex:
             err_msg = _('Unable to deactivate target %(target)s') % {
