@@ -198,10 +198,16 @@ class JovianRESTProxy(object):
                     if ret["error"] is not None:
                         if ("errno" in ret["error"]) and \
                                 ("class" in ret["error"]):
+                            if (ret["error"]["errno"] == 1) and\
+                                    (ret["error"]["class"] ==
+                                     "opene.tools.scstadmin.ScstAdminError"):
+                                LOG.warning(
+                                    "ScstAdminError error retrying!")
+                                continue
                             if (ret["error"]["errno"] == 2) and\
                                     (ret["error"]["class"] ==
                                      "exceptions.OSError"):
-                                LOG.debug(
+                                LOG.warning(
                                     "Internal JDSS error retrying!")
                                 continue
                 break
