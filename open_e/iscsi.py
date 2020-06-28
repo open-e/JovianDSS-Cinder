@@ -164,15 +164,14 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         try:
             self.ra.modify_lun(vname, rename)
         except jexc.JDSSException as err:
-            LOG.warning('Failure in hidding  %s,'
-                        ' err: %s', vname, err)
-            msg = (_('Failure in interruction with %s.') % vname)
-            raise exception.VolumeBackendAPIException(msg)
+            msg = 'Failure in hidding {object}, err: {error}'
+            emsg = msg.format(object=vname, error=err)
+            LOG.warning(emsg)
+            raise exception.VolumeBackendAPIException(emsg)
 
     def _clean_garbage_snapshots(self, vname, snapshots):
         """Delete physical snapshots that have no descendents"""
         garbage = []
-        LOG.debug("clean_garbage_snapshots-----" + str(snapshots))
         for snap in snapshots:
             if snap['clones'] == '':
                 try:
@@ -681,7 +680,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                                                  'error': ex.message})
             raise exception.VolumeBackendAPIException(data=msg)
 
-    def _attach_target_volume(self, target_name, vname, vid):
+    def _attach_target_volume(self, target_name, vname):
         """Attach target to volume and handles exceptions
 
         Tryes to set attach volume to specific target.
@@ -692,17 +691,15 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         try:
             self.ra.attach_target_vol(target_name, vname)
         except jexc.JDSSRESTException as ex:
-            err_msg = (_('Unable to attach target %(target)s to '
-                         'volume %(volume)s because of %(error)s.') % {
-                            'target': target_name,
-                            'volume': vid,
-                            'error': six.text_type(ex)})
-            LOG.error(err_msg)
+            msg = ('Unable to attach volume to target {target} '
+                   'because of {error}.')
+            emsg = msg.format(target=target_name, error=six.text_type(ex))
+            LOG.error(emsg)
             try:
                 self.ra.delete_target(target_name)
             except jexc.JDSSException as ex:
-                raise exception.VolumeBackendAPIException(message=err_msg)
-            raise exception.VolumeBackendAPIException(message=err_msg)
+                raise exception.VolumeBackendAPIException(message=emsg)
+            raise exception.VolumeBackendAPIException(message=emsg)
 
     def _set_target_credentials(self, target_name, cred):
         """Set CHAP configuration for target and handle exceptions
@@ -724,9 +721,9 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             err_msg = (_('Unable to create user %(user)s '
                          'for target %(target)s '
                          'because of %(error)s.') % {
-                            'target': target_name,
-                            'user': cred['name'],
-                            'error': six.text_type(ex)})
+                             'target': target_name,
+                             'user': cred['name'],
+                             'error': six.text_type(ex)})
 
             LOG.debug(err_msg)
 
@@ -758,7 +755,7 @@ class JovianISCSIDriver(driver.ISCSIDriver):
         self._create_target(target_name, True)
 
         # Attach volume
-        self._attach_target_volume(target_name, vname, volume['id'])
+        self._attach_target_volume(target_name, vname)
 
         # Set credentials
         self._set_target_credentials(target_name, chap_cred)
@@ -786,17 +783,17 @@ class JovianISCSIDriver(driver.ISCSIDriver):
             self._create_target(target_name, True)
 
         if not self.ra.is_target_lun(target_name, volume["id"]):
-            self._attach_target_volume(target_name, vname, volume['id'])
+            vname = jcom.vname(volume['id'])
+            self._attach_target_volume(target_name, vname)
 
         try:
             users = self.ra.get_target_user(target_name)
             if len(users) == 1:
                 if users[0]['name'] == chap_cred['name']:
                     return
-                else:
-                    self.ra.delete_target_user(
-                        target_name,
-                        users[0]['name'])
+                self.ra.delete_target_user(
+                    target_name,
+                    users[0]['name'])
             for user in users:
                 self.ra.delete_target_user(
                     target_name,
@@ -879,11 +876,11 @@ class JovianISCSIDriver(driver.ISCSIDriver):
                     self.jovian_iscsi_target_portal_port)
                 iscsi_properties['target_luns'].append(0)
         else:
-            iscsi_properties['target_iqn'] = tname 
+            iscsi_properties['target_iqn'] = tname
             iscsi_properties['target_portal'] = (
-                self.ra.get_active_host()
-                + ":"
-                + self.jovian_iscsi_target_portal_port)
+                self.ra.get_active_host() +
+                ":" +
+                self.jovian_iscsi_target_portal_port)
 
         iscsi_properties['target_discovered'] = False
 
