@@ -1,4 +1,4 @@
-#    Copyright (c) 2016 Open-E, Inc.
+#    Copyright (c) 2020 Open-E, Inc.
 #    All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,16 +18,65 @@ from cinder.i18n import _
 
 
 class JDSSException(exception.VolumeDriverException):
+    """Unknown error"""
     message = _("%(reason)s")
 
 
 class JDSSRESTException(JDSSException):
-    message = _("JDSS REST request %(request) faild: %(reason)s.")
+    """Unknown communication error"""
+
+    message = _("JDSS REST request %(request)s faild: %(reason)s.")
 
 
 class JDSSRESTProxyException(JDSSException):
-    message = _("JDSS connection with %(host) failed: %(reason)s.")
+    """Connection with host failed"""
+
+    message = _("JDSS connection with %(host)s failed: %(reason)s.")
 
 
-class JDSSRESTResourceNotFoundException(JDSSException):
-    message = _("JDSS unable to found resource %(message)s.")
+class JDSSResourceNotFoundException(JDSSException):
+    """Resource does not exist"""
+
+    message = _("JDSS resource %(res)s DNE.")
+
+
+class JDSSVolumeNotFoundException(JDSSResourceNotFoundException):
+    """Volume does not exist"""
+
+    message = _("JDSS volume %(volume)s DNE.")
+
+
+class JDSSSnapshotNotFoundException(JDSSResourceNotFoundException):
+    """Snapshot does not exist"""
+
+    message = _("JDSS snapshot %(snapshot)s DNE.")
+
+
+class JDSSResourceExistsException(JDSSException):
+    """Resource with specified id exists"""
+
+    message = _("JDSS resource with id %(res)s exists.")
+
+
+class JDSSSnapshotExistsException(JDSSResourceExistsException):
+    """Snapshot with the same id exists"""
+
+    message = _("JDSS snapshot %(snapshot)s already exists.")
+
+
+class JDSSVolumeExistsException(JDSSResourceExistsException):
+    """Volume with same id exists"""
+
+    message = _("JDSS volume %(volume)s already exists.")
+
+
+class JDSSResourceIsBusyException(JDSSException):
+    """Resource have dependents"""
+
+    message = _("JDSS resource %(res)s is busy.")
+
+
+class JDSSSnapshotIsBusyException(JDSSResourceIsBusyException):
+    """Snapshot have dependent clones"""
+
+    message = _("JDSS snapshot %(snapshot)s is busy.")

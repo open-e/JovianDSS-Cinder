@@ -1,4 +1,4 @@
-#    Copyright (c) 2016 Open-E, Inc.
+#    Copyright (c) 2020 Open-E, Inc.
 #    All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -21,6 +21,7 @@ import time
 from oslo_log import log as logging
 from oslo_utils import netutils as o_netutils
 import requests
+import urllib3
 
 from cinder import exception
 from cinder.i18n import _
@@ -36,15 +37,18 @@ class JovianRESTProxy(object):
     def __init__(self, config):
         """:param config: config is like dict."""
 
-        self.proto = config.get('jovian_rest_protocol', 'https')
-        self.hosts = config.safe_get('jovian_hosts')
-        self.port = str(config.get('jovian_rest_port'))
+        self.proto = 'http'
+        if config.get('driver_use_ssl', True):
+            self.proto = 'https'
+
+        self.hosts = config.safe_get('san_hosts')
+        self.port = str(config.get('san_api_port', 82))
 
         self.active_host = 0
 
         for host in self.hosts:
             if o_netutils.is_valid_ip(host) is False:
-                err_msg = ('Invalid value of jovian_host property:'
+                err_msg = ('Invalid value of jovian_host property: '
                            '%(addr)s, IP address expected.' %
                            {'addr': host})
 
@@ -56,31 +60,29 @@ class JovianRESTProxy(object):
 
         self.pool = config.safe_get('jovian_pool')
 
-        self.user = config.get('jovian_user', 'admin')
-        self.password = config.get('jovian_password', 'admin')
+        self.user = config.get('san_login', 'admin')
+        self.password = config.get('san_password', 'admin')
         self.auth = requests.auth.HTTPBasicAuth(self.user, self.password)
         self.verify = False
         self.retry_n = config.get('jovian_rest_send_repeats', 3)
         self.header = {'connection': 'keep-alive',
                        'Content-Type': 'application/json',
                        'authorization': 'Basic '}
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _get_pool_url(self, host):
-        url = self.proto + '://' + \
-            host + ':' + \
-            self.port + \
-            "/api/v3" + \
-            "/pools/" + \
-            self.pool
+        url = ('%(proto)s://%(host)s:%(port)s/api/v3/pools/%(pool)s' % {
+            'proto': self.proto,
+            'host': host,
+            'port': self.port,
+            'pool': self.pool})
         return url
 
     def _get_url(self, host):
-        url = (self.proto
-               + '://'
-               + host
-               + ':'
-               + self.port
-               + "/api/v3")
+        url = ('%(proto)s://%(host)s:%(port)s/api/v3' % {
+            'proto': self.proto,
+            'host': host,
+            'port': self.port})
         return url
 
     def request(self, request_method, req, json_data=None):
@@ -90,21 +92,21 @@ class JovianRESTProxy(object):
         :param url: where to send
         :param json_data: data
         """
-        for i in range(int(str(self.retry_n))):
+        for j in range(self.retry_n):
             for i in range(len(self.hosts)):
                 host = self.hosts[self.active_host]
                 url = self._get_url(host) + req
 
                 LOG.debug(
-                    "sending request of type %(type)s to %(url)s \
-                    attempt: %(num)s.",
+                    "sending request of type %(type)s to %(url)s "
+                    "attempt: %(num)s.",
                     {'type': request_method,
                      'url': url,
-                     'num': i})
+                     'num': j})
 
                 if json_data is not None:
                     LOG.debug(
-                        "sending data: %s.", str(json_data))
+                        "sending data: %s.", json_data)
                 try:
 
                     ret = self._request_routine(url, request_method, json_data)
@@ -120,7 +122,7 @@ class JovianRESTProxy(object):
                     continue
             time.sleep(self.delay)
 
-        msg = (_('%(times) faild in a row') % {'times': i})
+        msg = (_('%(times) faild in a row') % {'times': j})
 
         raise jexc.JDSSRESTProxyException(host=url, reason=msg)
 
@@ -132,17 +134,17 @@ class JovianRESTProxy(object):
         :param json_data: data
         """
         url = ""
-        for i in range(int(str(self.retry_n))):
+        for j in range(self.retry_n):
             for i in range(len(self.hosts)):
                 host = self.hosts[self.active_host]
                 url = self._get_pool_url(host) + req
 
                 LOG.debug(
-                    "sending pool request of type %(type)s to %(url)s \
-                    attempt: %(num)s.",
+                    "sending pool request of type %(type)s to %(url)s "
+                    "attempt: %(num)s.",
                     {'type': request_method,
                      'url': url,
-                     'num': i})
+                     'num': j})
 
                 if json_data is not None:
                     LOG.debug(
@@ -162,7 +164,7 @@ class JovianRESTProxy(object):
                     continue
             time.sleep(int(self.delay))
 
-        msg = (_('%(times) faild in a row') % {'times': i})
+        msg = (_('%(times) faild in a row') % {'times': j})
 
         raise jexc.JDSSRESTProxyException(host=url, reason=msg)
 
@@ -197,20 +199,25 @@ class JovianRESTProxy(object):
 
                 if ret["code"] == 500:
                     if ret["error"] is not None:
-                        if ("errno" in ret["error"]) and \
-                                ("class" in ret["error"]):
-                            if (ret["error"]["errno"] == 2) and\
-                                    (ret["error"]["class"] ==
-                                        "exceptions.OSError"):
-                                LOG.debug(
-                                    "Internal JDSS error retrying!")
+                        if (("errno" in ret["error"]) and
+                                ("class" in ret["error"])):
+                            if (ret["error"]["class"] ==
+                                    "opene.tools.scstadmin.ScstAdminError"):
+                                LOG.debug("ScstAdminError %(code)d %(msg)s", {
+                                    "code": ret["error"]["errno"],
+                                    "msg": ret["error"]["message"]})
+                                continue
+                            if (ret["error"]["class"] ==
+                                    "exceptions.OSError"):
+                                LOG.debug("OSError %(code)d %(msg)s", {
+                                    "code": ret["error"]["errno"],
+                                    "msg": ret["error"]["message"]})
                                 continue
                 break
 
             except requests.HTTPError as err:
                 LOG.debug("HTTP parsing error %s", err)
                 self.active_host = (self.active_host + 1) % len(self.hosts)
-                pass
 
         return ret
 

@@ -1,4 +1,4 @@
-#    Copyright (c) 2016 Open-E, Inc.
+#    Copyright (c) 2020 Open-E, Inc.
 #    All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,9 +15,12 @@
 
 
 """REST cmd interoperation class for JovianDSS driver."""
+import re
+
 from oslo_log import log as logging
 
 from cinder import exception
+from cinder.i18n import _
 from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 from cinder.volume.drivers.open_e.jovian_common import rest_proxy
 
@@ -29,9 +32,29 @@ class JovianRESTAPI(object):
 
     def __init__(self, config):
 
-        self.target_p = config.get('jovian_target_prefix')
+        self.target_p = config.get('iscsi_target_prefix',
+                                   'iqn.2020-04.com.open-e.cinder:')
         self.pool = config.safe_get('jovian_pool')
         self.rproxy = rest_proxy.JovianRESTProxy(config)
+
+        self.resource_dne_msg = (
+            re.compile(r'^Zfs resource: .* not found in this collection\.$'))
+
+    def _general_error(self, url, resp):
+        reason = "Request {} failure".format(url)
+        if 'error' in resp:
+
+            eclass = resp.get('class', 'Unknown')
+            code = resp.get('code', 'Unknown')
+            msg = resp.get('message', 'Unknown')
+
+            reason = ("Request to {url} failed with code:%{code} "
+                      "of type:{eclass} reason:{message}")
+            reason = reason.format(eclass=eclass,
+                                   code=code,
+                                   message=msg,
+                                   url=url)
+        raise jexc.JDSSException(reason=reason)
 
     def get_active_host(self):
         """Return address of currently used host."""
@@ -51,10 +74,10 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('GET', req)
 
-        if resp["code"] != 200 or resp["error"] is not None:
-            return False
+        if resp["code"] == 200 and not resp["error"]:
+            return True
 
-        return True
+        return False
 
     def get_iface_info(self):
         """get_iface_info
@@ -68,10 +91,9 @@ class JovianRESTAPI(object):
         LOG.debug("get network interfaces")
 
         resp = self.rproxy.request('GET', req)
-        if resp['error'] is None and resp['code'] == 200:
+        if (resp['error'] is None) and (resp['code'] == 200):
             return resp['data']
-        else:
-            raise jexc.JDSSRESTException(resp['error']['message'])
+        raise jexc.JDSSRESTException(resp['error']['message'])
 
     def get_luns(self):
         """get_all_pool_volumes.
@@ -88,10 +110,10 @@ class JovianRESTAPI(object):
 
         if resp['error'] is None and resp['code'] == 200:
             return resp['data']
-        else:
-            raise jexc.JDSSRESTException(resp['error']['message'])
+        raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def create_lun(self, volume_name, volume_size, sparse=False):
+    def create_lun(self, volume_name, volume_size, sparse=False,
+                   block_size=None):
         """create_volume.
 
         POST
@@ -107,14 +129,15 @@ class JovianRESTAPI(object):
             'size': volume_size_str,
             'sparse': sparse
         }
+        if block_size:
+            jbody['blocksize'] = block_size
 
         req = '/volumes'
 
         LOG.debug("create volume %s", str(jbody))
         resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
-        if resp["error"] is None and (
-                resp["code"] == 200 or resp["code"] == 201):
+        if not resp["error"] and resp["code"] in (200, 201):
             return
 
         if resp["error"] is not None:
@@ -131,7 +154,6 @@ class JovianRESTAPI(object):
         PUT /volumes/<string:volume_name>
         """
         req = '/volumes/' + volume_name
-        # TODO(andrei.perepiolkin@open-e.com):rethink volume size
         volume_size_str = str(volume_size)
         jbody = {
             'size': volume_size_str
@@ -142,14 +164,14 @@ class JovianRESTAPI(object):
                    "size": volume_size_str})
         resp = self.rproxy.pool_request('PUT', req, json_data=jbody)
 
-        if resp["error"] is None and resp["code"] == 201:
+        if not resp["error"] and resp["code"] == 201:
             return
 
-        if resp["error"] is not None:
+        if resp["error"]:
             raise jexc.JDSSRESTException(
                 'Failed to extend volume {}'.format(resp['error']['message']))
 
-        raise jexc.JDSSRESTException('Failed to create volume.')
+        raise jexc.JDSSRESTException('Failed to extend volume.')
 
     def is_lun(self, volume_name):
         """is_lun.
@@ -165,7 +187,7 @@ class JovianRESTAPI(object):
         LOG.debug("check volume %s", volume_name)
         ret = self.rproxy.pool_request('GET', req)
 
-        if ret["error"] is None and ret["code"] == 200:
+        if not ret["error"] and ret["code"] == 200:
             return True
         return False
 
@@ -198,7 +220,7 @@ class JovianRESTAPI(object):
                 "readonly": "off",
                 "mlslabel": "none",
                 "secondarycache": "all",
-                "available": "976432152576",
+                "available": "976123452576",
                 "resource_name": "Pool-0/v1",
                 "volblocksize": "131072",
                 "refcompressratio": "1.00x",
@@ -219,97 +241,130 @@ class JovianRESTAPI(object):
         LOG.debug("get volume %s info", volume_name)
         resp = self.rproxy.pool_request('GET', req)
 
-        if resp['error'] is None and resp['code'] == 200:
+        if not resp['error'] and resp['code'] == 200:
             return resp['data']
-        else:
-            raise jexc.JDSSRESTException(resp['error']['message'])
 
-    def delete_lun(self, volume_name, recursively_children=False):
+        if resp['error']:
+            if 'message' in resp['error']:
+                if self.resource_dne_msg.match(resp['error']['message']):
+                    raise jexc.JDSSResourceNotFoundException(res=volume_name)
+
+        self._general_error(req, resp)
+
+    def modify_lun(self, volume_name, prop=None):
+        """Update volume properties
+
+        :prop volume_name: volume name
+        :prop prop: dictionary
+            {
+                <property>: <value>
+            }
+        """
+
+        req = '/volumes/' + volume_name
+
+        resp = self.rproxy.pool_request('PUT', req, json_data=prop)
+
+        if resp["code"] in (200, 201, 204):
+            LOG.debug("volume %s updated", volume_name)
+            return
+
+        if resp["code"] == 500:
+            if resp["error"] is not None:
+                if resp["error"]["errno"] == 1:
+                    raise jexc.JDSSResourceNotFoundException(
+                        res=volume_name)
+
+        self._general_error(req, resp)
+
+    def make_readonly_lun(self, volume_name):
+        """Set volume into read only mode
+
+        :param: volume_name: volume name
+        """
+        prop = {"property_name": "readonly", "property_value": "on"}
+
+        self.modify_property_lun(volume_name, prop)
+
+    def modify_property_lun(self, volume_name, prop=None):
+        """Change volume properties
+
+        :prop: volume_name: volume name
+        :prop: prop: dictionary of volume properties in format
+                { "property_name": "<name of property>",
+                  "property_value":"<value of a property>"}
+        """
+
+        req = '/volumes/{}/properties'.format(volume_name)
+
+        resp = self.rproxy.pool_request('PUT', req, json_data=prop)
+
+        if resp["code"] in (200, 201, 204):
+            LOG.debug(
+                "volume %s properties updated", volume_name)
+            return
+
+        if resp["code"] == 500:
+            if resp["error"] is not None:
+                if resp["error"]["errno"] == 1:
+                    raise jexc.JDSSResourceNotFoundException(
+                        res=volume_name)
+                raise jexc.JDSSRESTException(request=req,
+                                             reason=resp['error']['message'])
+        raise jexc.JDSSRESTException(request=req, reason="unknown")
+
+    def delete_lun(self, volume_name,
+                   recursively_children=False,
+                   recursively_dependents=False,
+                   force_umount=False):
         """delete_volume.
 
         DELETE /volumes/<string:volumename>
         :param volume_name:
         :return:
         """
-        if not self.is_lun(volume_name):
-            return
+        jbody = {}
+        if recursively_children:
+            jbody['recursively_children'] = True
 
-        jbody = None
-        if recursively_children is True:
-            jbody = {
-                'recursively_children': recursively_children
-            }
+        if recursively_dependents:
+            jbody['recursively_dependents'] = True
+
+        if force_umount:
+            jbody['force_umount'] = True
 
         req = '/volumes/' + volume_name
         LOG.debug(("delete volume:%(vol)s "
-                   "recursively children:%(rc)s"),
+                   "recursively children:%(args)s"),
                   {'vol': volume_name,
-                   'rc': str(recursively_children)})
+                   'args': jbody})
 
-        resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
+        if len(jbody) > 0:
+            resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
+        else:
+            resp = self.rproxy.pool_request('DELETE', req)
 
-        if ((resp["code"] == 200) or
-                (resp["code"] == 201) or
-                (resp["code"] == 204)):
+        if resp["code"] == 204:
             LOG.debug(
                 "volume %s deleted", volume_name)
             return
 
         # Handle DNE case
-        if resp["code"] == 404:
-            LOG.debug(
-                "volume %s do not exists, delition success", volume_name)
-            return
-
-        if resp["error"] is not None:
-            if "errno" in resp["error"]:
-                if resp["error"]["errno"] == 1:
+        if resp["code"] == 500:
+            if 'message' in resp['error']:
+                if self.resource_dne_msg.match(resp['error']['message']):
+                    LOG.debug("volume %s do not exists, delition success",
+                              volume_name)
                     return
 
         # Handle volume busy
-        if resp["code"] == 500 and resp["error"] is not None:
+        if resp["code"] == 500 and resp["error"]:
             if resp["error"]["errno"] == 1000:
                 LOG.warning(
                     "volume %s is busy", volume_name)
                 raise exception.VolumeIsBusy(volume_name=volume_name)
 
         raise jexc.JDSSRESTException('Failed to delete volume.')
-
-    def get_zvol_info(self, lun_name):
-        """get_zvol_info.
-
-        GET /san/iscsi/targets/ target_name /luns/ lun_name
-        :param lun_name:
-        :return:
-        {
-            "data": {
-                "name": "4",
-                "blocksize": "512",
-                "mode": "ro",
-                "scsiid": "6778da4b1cb60221",
-                "type": "volume",
-                "lun": "1"
-            },
-            "error": null
-        }
-        """
-        target_name = self.target_p + lun_name
-
-        req = '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
-
-        LOG.debug("check targets %(tar)s volume %(vol)s",
-                  {"tar": target_name,
-                   "vol": lun_name})
-
-        resp = self.rproxy.pool_request('GET', req)
-
-        if resp["error"] is None and resp["code"] == 200:
-            return resp["data"]
-
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling
-        # of different error cases
-        msg = 'Failed to get zvol ' + resp['error']['message']
-        raise jexc.JDSSRESTException(reason=msg, request=req)
 
     def is_target(self, target_name):
         """is_target.
@@ -323,8 +378,7 @@ class JovianRESTAPI(object):
         LOG.debug("check if targe %s exists", target_name)
         resp = self.rproxy.pool_request('GET', req)
 
-        if resp["error"] is not None or not (
-                resp["code"] == 200 or resp["code"] == 201):
+        if resp["error"] or resp["code"] not in (200, 201):
             return False
 
         if "name" in resp["data"]:
@@ -337,7 +391,7 @@ class JovianRESTAPI(object):
 
     def create_target(self,
                       target_name,
-                      use_chap=False,
+                      use_chap=True,
                       allow_ip=None,
                       deny_ip=None):
         """create_target.
@@ -357,25 +411,25 @@ class JovianRESTAPI(object):
 
         LOG.debug("create target %s", target_name)
 
-        jdata = {"name": target_name}
+        jdata = {"name": target_name, "active": True}
 
         jdata["incoming_users_active"] = use_chap
 
-        if allow_ip is not None:
+        if allow_ip:
             jdata["allow_ip"] = allow_ip
 
-        if deny_ip is not None:
+        if deny_ip:
             jdata["deny_ip"] = deny_ip
 
         resp = self.rproxy.pool_request('POST', req, json_data=jdata)
 
-        if resp["error"] is None and resp["code"] == 201:
+        if not resp["error"] and resp["code"] == 201:
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling
-        # of different error cases
-        msg = 'Failed to create target {}.'.format(resp['error']['message'])
-        raise jexc.JDSSRESTException(reason=msg, request=req)
+        if resp["code"] == 409:
+            raise jexc.JDSSResourceExistsException(res=target_name)
+
+        self._general_error(req, resp)
 
     def delete_target(self, target_name):
         """delete_target.
@@ -391,151 +445,20 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('DELETE', req)
 
-        if ((resp["code"] == 200) or
-                (resp["code"] == 201) or
-                (resp["code"] == 204)):
+        if resp["code"] in (200, 201, 204):
             LOG.debug(
                 "target %s deleted", target_name)
             return
 
+        not_found_err = "opene.exceptions.ItemNotFoundError"
         if (resp["code"] == 404) or \
-                (resp["error"]["class"] == "werkzeug.exceptions.NotFound"):
-            LOG.debug("target %s not found, exiting as success", target_name)
-            return
+                (resp["error"]["class"] == not_found_err):
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
 
-        raise jexc.JDSSRESTException(reason='Failed to delete target.',
-                                     request=req)
-
-    def modify_target(self, target_name, **kwargs):
-        """modify_target.
-
-        PUT /san/iscsi/targets/<target_name>
-        :param target_name:
-        :parameter
-        {
-            "name": "new_target_name",
-            "active": True/False
-            "incoming_users_active": True/False
-            "outgoing_user": {
-                            "password": "password",
-                            "name": "mutual_user"
-                            }
-            "allow_ip": [
-                "192.168.2.30/0",
-                "192.168.3.45"
-                    ],
-            "deny_ip":  [
-                "0.0.0.0/0"
-                        ]
-        }
-        :return:
-        """
-        req = '/san/iscsi/targets/' + target_name
-
-        resp = self.rproxy.pool_request('PUT', req, json_data=kwargs)
-
-        if resp['error'] is not None or resp['code'] != 201:
-            if resp['error']['message']:
-                raise jexc.JDSSRESTException(
-                    reason=resp['error']['message'],
-                    request=req)
-            else:
-                raise jexc.JDSSRESTException(
-                    reqson='Something wrong',
-                    request=req)
-
-    def get_target_ip_settings(self, target_name):
-        """get_target_ip_settings
-
-        GET /san/iscsi/targets/<target_name>
-        Use GET to abtain allowed and deny ip lists
-        :param target_name:
-        :return:
-        {
-            "allow_ip": [
-                "192.168.2.30/0",
-                "192.168.3.45"
-                    ],
-            "deny_ip":  [
-                "0.0.0.0/0"
-                        ]
-        }
-        """
-        req = '/san/iscsi/targets/' + target_name
-        LOG.debug("get target %s settings", target_name)
-
-        resp = self.rproxy.pool_request('GET', req)
-
-        if resp['error'] is not None or not (
-                resp['code'] == 200 or
-                resp['code'] == 201):
-            if resp['error']['message']:
-                raise jexc.JDSSRESTException(reason=resp['error']['message'],
-                                             request=req)
-            else:
-                raise jexc.JDSSRESTException(reason='Something wrong',
-                                             request=req)
-
-        return {
-            'allow_ip': resp['data']['allow_ip'],
-            'deny_ip': resp['data']['deny_ip']}
-
-    def set_target_ip_settings(self, target_name, settings):
-        """set_target_ip_settings
-
-        PUT /san/iscsi/targets/<target_name>
-        Use GET and PUT requests to update allowed and deny ip lists
-        :param target_name:
-        :param settings
-        {
-            "allow_ip": [
-                "192.168.2.30/0",
-                "192.168.3.45"
-                    ],
-            "deny_ip":  [
-                "0.0.0.0/0"
-                        ]
-        }
-        :return: Throws JDSSRESTException if fails
-        """
-        req = '/san/iscsi/targets/' + target_name
-
-        resp = self.rproxy.pool_request('GET', req)
-
-        if resp['error'] is not None or not (
-                resp['code'] == 200 or
-                resp['code'] == 201):
-
-            if resp['error']['message']:
-                raise jexc.JDSSRESTException(reason=resp['error']['message'],
-                                             request=req)
-            else:
-                raise jexc.JDSSRESTException(reason='Something wrong',
-                                             request=req)
-
-        target_settings = resp['data']
-
-        target_settings['allow_ip'] = settings['allow_ip']
-        target_settings['deny_ip'] = settings['deny_ip']
-
-        target_settings.pop('conflicted')
-
-        LOG.debug("set target %s settings", target_name)
-        resp = self.rproxy.pool_request('PUT', req, json_data=target_settings)
-
-        if resp['error'] is not None or not (
-                resp['code'] == 200 or
-                resp['code'] == 201):
-            if resp['error']['message']:
-                raise jexc.JDSSRESTException(reason=resp['error']['message'],
-                                             request=req)
-            else:
-                raise jexc.JDSSRESTException(reason='Something wrong',
-                                             request=req)
-        return
+        self._general_error(req, resp)
 
     def create_target_user(self, target_name, chap_cred):
-        """create_target_user.
+        """Set CHAP credentials for accees specific target.
 
         POST
         /san/iscsi/targets/<target_name>/incoming-users
@@ -554,16 +477,59 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('POST', req, json_data=chap_cred)
 
-        if resp["error"] is None and \
-                (resp["code"] == 200 or
-                 resp["code"] == 201 or
-                 resp["code"] == 204):
+        if not resp["error"] and resp["code"] in (200, 201, 204):
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling
-        # of different error cases
-        msg = 'Failed to set target user {}.'.format(resp['error']['message'])
-        raise jexc.JDSSRESTException(reason=msg, request=req)
+        if resp['code'] == 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
+        self._general_error(req, resp)
+
+    def get_target_user(self, target_name):
+        """Get name of CHAP user for accessing target
+
+        GET
+        /san/iscsi/targets/<target_name>/incoming-users
+
+        :param target_name:
+        """
+        req = '/san/iscsi/targets/' + target_name + "/incoming-users"
+
+        LOG.debug("get chap cred for target %s", target_name)
+
+        resp = self.rproxy.pool_request('GET', req)
+
+        if not resp["error"] and resp["code"] == 200:
+            return resp['data']
+
+        if resp['code'] == 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
+        self._general_error(req, resp)
+
+    def delete_target_user(self, target_name, user_name):
+        """Delete CHAP user for target
+
+        DELETE
+        /san/iscsi/targets/<target_name>/incoming-users/<user_name>
+
+        :param target_name: target name
+        :param user_name: user name
+        """
+        req = '/san/iscsi/targets/{0}/incoming-users/{1}'.format(
+            target_name, user_name)
+
+        LOG.debug("remove credentails from target %s", target_name)
+
+        resp = self.rproxy.pool_request('DELETE', req)
+
+        if resp["error"] is None and resp["code"] == 204:
+            return
+
+        if resp['code'] == 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
+        self._general_error(req, resp)
 
     def is_target_lun(self, target_name, lun_name):
         """is_target_lun.
@@ -581,30 +547,21 @@ class JovianRESTAPI(object):
                    'tar': target_name})
         resp = self.rproxy.pool_request('GET', req)
 
-        if resp["code"] == 404:
+        if not resp["error"] and resp["code"] == 200:
+            LOG.debug("volume %(vol)s is associated with %(tar)s",
+                      {'vol': lun_name,
+                       'tar': target_name})
+            return True
+
+        if resp['code'] == 404:
+            LOG.debug("volume %(vol)s is not associated with %(tar)s",
+                      {'vol': lun_name,
+                       'tar': target_name})
             return False
 
-        if resp["error"] is not None:
-            return False
+        self._general_error(req, resp)
 
-        if resp["code"] != 200:
-            return False
-
-        if resp["data"] is None:
-            return False
-
-        if "name" not in resp["data"]:
-            return False
-
-        if resp["data"]["name"] != lun_name:
-            return False
-        LOG.debug("volume %(vol)s is associated with %(tar)s",
-                  {'vol': lun_name,
-                   'tar': target_name})
-
-        return True
-
-    def attach_target_vol(self, target_name, lun_name):
+    def attach_target_vol(self, target_name, lun_name, lun_id=0):
         """attach_target_vol.
 
         POST /san/iscsi/targets/<target_name>/luns
@@ -612,23 +569,25 @@ class JovianRESTAPI(object):
         :param lun_name:
         :return:
         """
-        req = '/san/iscsi/targets/' + target_name + "/luns"
+        req = '/san/iscsi/targets/{}/luns'.format(target_name)
 
-        jbody = {"name": lun_name}
+        jbody = {"name": lun_name, "lun": lun_id}
         LOG.debug("atach volume %(vol)s to target %(tar)s",
                   {'vol': lun_name,
                    'tar': target_name})
 
         resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
-        if resp["error"] is None and resp["code"] == 201:
+        if not resp["error"] and resp["code"] == 201:
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling
-        # of different error cases
+        if resp['code'] == 409:
+            raise jexc.JDSSResourceExistsException(res=lun_name)
 
-        raise jexc.JDSSRESTException(
-            'Failed to attach volume {}.'.format(resp['error']['message']))
+        if resp['code'] == 404:
+            raise jexc.JDSSResourceNotFoundException(res=target_name)
+
+        self._general_error(req, resp)
 
     def detach_target_vol(self, target_name, lun_name):
         """detach_target_vol.
@@ -641,31 +600,19 @@ class JovianRESTAPI(object):
         """
         req = '/san/iscsi/targets/' + target_name + "/luns/" + lun_name
 
-        if not self.is_target_lun(target_name, lun_name):
-            return
-
         LOG.debug("detach volume %(vol)s from target %(tar)s",
                   {'vol': lun_name,
                    'tar': target_name})
 
         resp = self.rproxy.pool_request('DELETE', req)
 
-        if resp["code"] == 500 and \
-                resp["error"]["class"] == \
-                "opene.san.iscsi.TargetNotFoundError":
+        if resp["code"] in (200, 201, 204):
             return
 
-        if resp["code"] == 500 and \
-                resp["error"]["class"] == \
-                "opene.san.iscsi.ZvolNotAssignedToTarget":
-            return
+        if resp['code'] == 404:
+            raise jexc.JDSSResourceNotFoundException(res=lun_name)
 
-        if (resp["code"] == 200) or \
-                (resp["code"] == 201) or \
-                (resp["code"] == 204):
-            return
-
-        raise jexc.JDSSRESTException("unable to detach lun.")
+        self._general_error(req, resp)
 
     def create_snapshot(self, volume_name, snapshot_name):
         """create_snapshot.
@@ -686,17 +633,19 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
-        if (resp["error"] is None) and (
-                (resp["code"] == 200) or
-                (resp["code"] == 201) or
-                (resp["code"] == 204)):
+        if not resp["error"] and resp["code"] in (200, 201, 204):
             return
 
-        # TODO(andrei.perepiolkin@open-e.com): provide additional handling of
-        # different error cases
+        if resp["code"] == 500:
+            if resp["error"]:
+                if resp["error"]["errno"] == 1:
+                    raise jexc.JDSSVolumeNotFoundException(
+                        volume=volume_name)
+                if resp["error"]["errno"] == 5:
+                    raise jexc.JDSSSnapshotExistsException(
+                        snapshot=snapshot_name)
 
-        raise jexc.JDSSRESTException(
-            'Failed to create snapshot {}.'.format(resp['error']['message']))
+        self._general_error(req, resp)
 
     def create_volume_from_snapshot(self, volume_name, snapshot_name,
                                     original_vol_name, **options):
@@ -725,15 +674,20 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('POST', req, json_data=jbody)
 
-        if resp["error"] is None and (
-                (resp["code"] == 200) or
-                (resp["code"] == 201) or
-                (resp["code"] == 204)):
+        if not resp["error"] and resp["code"] in (200, 201, 204):
             return
+
+        if resp["code"] == 500:
+            if resp["error"]:
+                if resp["error"]["errno"] == 100:
+                    raise jexc.JDSSVolumeExistsException(
+                        volume=volume_name)
+                args = {"vol": volume_name, "e": resp['error']['message']}
+                msg = _('Failed to create volume %(vol)s, err: %(e)s') % args
+                raise jexc.JDSSRESTException(msg)
 
         raise jexc.JDSSRESTException('unable to create volume')
 
-    # TODO(andrei.perepiolkin@open-e.com): implement this
     def is_snapshot(self, volume_name, snapshot_name):
         """is_snapshots.
 
@@ -752,7 +706,7 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('GET', req)
 
-        if resp["error"] is None and resp["code"] == 200:
+        if not resp["error"] and resp["code"] == 200:
             return True
 
         return False
@@ -789,13 +743,13 @@ class JovianRESTAPI(object):
                    'vol': volume_name})
 
         jbody = {}
-        if recursively_children is True:
+        if recursively_children:
             jbody['recursively_children'] = True
 
-        if recursively_dependents is True:
+        if recursively_dependents:
             jbody['recursively_dependents'] = True
 
-        if force_umount is True:
+        if force_umount:
             jbody['force_umount'] = True
 
         resp = dict()
@@ -804,13 +758,20 @@ class JovianRESTAPI(object):
         else:
             resp = self.rproxy.pool_request('DELETE', req)
 
-        if ((resp["code"] == 200) or
-                (resp["code"] == 201) or
-                (resp["code"] == 204)):
+        if resp["code"] in (200, 201, 204):
             LOG.debug("snapshot %s deleted", snapshot_name)
             return
-        # TODO(andrei.perepiolkin@open-e.com): analise error
-        raise exception.SnapshotIsBusy(snapshot_name=snapshot_name)
+
+        if resp["code"] == 500:
+            if resp["error"]:
+                if resp["error"]["errno"] == 1000:
+                    raise jexc.JDSSSnapshotIsBusyException(
+                        snapshot=snapshot_name)
+                msg = 'Failed to delete snapshot {}, err: {}'.format(
+                    snapshot_name, resp['error']['message'])
+                raise jexc.JDSSRESTException(msg)
+        msg = 'Failed to delete snapshot {}'.format(snapshot_name)
+        raise jexc.JDSSRESTException(msg)
 
     def get_snapshots(self, volume_name):
         """get_snapshots.
@@ -850,9 +811,13 @@ class JovianRESTAPI(object):
 
         resp = self.rproxy.pool_request('GET', req)
 
-        if resp["error"] is None and resp["code"] == 200:
-            return resp["data"]
+        if not resp["error"] and resp["code"] == 200:
+            return resp["data"]["entries"]
 
+        if resp['code'] == 500:
+            if 'message' in resp['error']:
+                if self.resource_dne_msg.match(resp['error']['message']):
+                    raise jexc.JDSSResourceNotFoundException(volume_name)
         raise jexc.JDSSRESTException('unable to get snapshots')
 
     def get_pool_stats(self):
@@ -922,7 +887,7 @@ class JovianRESTAPI(object):
         LOG.debug("Get pool %s fsprops", self.pool)
 
         resp = self.rproxy.pool_request('GET', req)
-        if resp["error"] is None and resp["code"] == 200:
+        if not resp["error"] and resp["code"] == 200:
             return resp["data"]
 
         raise jexc.JDSSRESTException('Unable to get pool info')

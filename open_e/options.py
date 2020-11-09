@@ -1,4 +1,4 @@
-#    Copyright (c) 2016 Open-E, Inc.
+#    Copyright (c) 2020 Open-E, Inc.
 #    All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,67 +16,33 @@
 from oslo_config import cfg
 
 jdss_connection_opts = [
-    cfg.ListOpt('jovian_hosts',
+    cfg.ListOpt('san_hosts',
                 default='',
                 help='IP address of Open-E JovianDSS SA'),
-    cfg.IntOpt('jovian_rest_port',
-               default=82,
-               help='HTTP port to connect to OpenE JovianDSS REST API server'),
-    cfg.StrOpt('jovian_rest_protocol',
-               default='https',
-               choices=['http', 'https'],
-               help='Use http or https for REST connection (default https)'),
-    cfg.StrOpt('jovian_rest_send_repeats',
+    cfg.IntOpt('jovian_rest_send_repeats',
                default=3,
                help='Number of retries to send REST request.'),
     cfg.IntOpt('jovian_recovery_delay',
                default=60,
                help='Time before HA cluster failure.'),
-    cfg.StrOpt('jovian_user',
-               default='admin',
-               help='User name to connect to Open-E JovianDSS SA'),
-    cfg.StrOpt('jovian_password',
-               default='password',
-               help='Password to connect to Open-E JovianDSS SA',
-               secret=True),
     cfg.ListOpt('jovian_ignore_tpath',
                 default=[],
                 help='List of multipath ip addresses to ignore.'),
 ]
 
 jdss_iscsi_opts = [
-    cfg.IntOpt('jovian_iscsi_target_portal_port',
-               default=3260,
-               help='Open-E JovianDSS target portal port'),
-    cfg.StrOpt('jovian_pool',
-               default='Cinder-Pool-0',
-               help='JovianDSS pool that holds all cinder volumes'),
-    cfg.StrOpt('jovian_target_prefix',
-               default='iqn.2016-04.com.open-e.cinder:',
-               help='IQN prefix for iSCSI targets'),
-    cfg.StrOpt('jovian_target_group_prefix',
-               default='cinder/',
-               help='Prefix for iSCSI target groups on Open-E JovianDSS SA'),
-    cfg.BoolOpt('jovian_chap_auth',
-                default=False,
-                help='Use CHAP authentication.'),
-    cfg.StrOpt('jovian_chap_username',
-               default='admin',
-               help='CHAP user name for for iSCSI connection'),
-    cfg.StrOpt('jovian_chap_pass_len',
+    cfg.IntOpt('chap_password_len',
                default=12,
                help='Length of the random string for CHAP password.'),
-
+    cfg.StrOpt('jovian_pool',
+               default='Pool-0',
+               help='JovianDSS pool that holds all cinder volumes'),
 ]
 
 jdss_volume_opts = [
-    cfg.StrOpt('jovian_blocksize',
-               default='8KB',
-               help='Block size for volumes (512B - 128KB)'),
-    cfg.BoolOpt('jovian_provisioning_thin',
-                default=False,
-                help='Enables or disables the creation of sparse'
-                     ' (thin-provisioned) volumes'),
+    cfg.StrOpt('jovian_block_size',
+               default='128K',
+               help='Block size for volumes (512 - 128K)'),
 ]
 
 CONF = cfg.CONF
