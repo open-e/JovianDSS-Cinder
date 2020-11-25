@@ -42,7 +42,7 @@ jdss_iscsi_opts = [
 jdss_volume_opts = [
     cfg.StrOpt('jovian_block_size',
                default='64K',
-               help='Block size for volumes (512 - 128K)'),
+               help='Block size can be: 32K, 64K, 128K, 256K, 512K, 1M'),
 ]
 
 CONF = cfg.CONF

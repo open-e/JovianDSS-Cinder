@@ -40,7 +40,7 @@ chap_password_len=14
 driver_use_ssl=True
 iscsi_target_prefix=iqn.2016-04.com.open-e.cinder:
 jovian_pool=Pool-0
-jovian_block_size=128K
+jovian_block_size=64K
 jovian_rest_send_repeats=4
 san_api_port=82
 target_port=3260
@@ -61,7 +61,7 @@ san_thin_provision=True
 | `driver_use_ssl`           | True                              | Use SSL to send requests to JovianDSS\[1\]                          |
 | `iscsi_target_prefix`      | iqn.2016-04.com.open-e:01:cinder- | Prefix that will be used to form target name for volume             |
 | `jovian_pool`              | Pool-0                            | Pool name that is going to be used. Must be created in \[2\]        |
-| `jovian_block_size`        | 128K                              | Block size for newly created volumes                                |
+| `jovian_block_size`        | 64K                               | Block size for new volume, can be: 32K, 64K, 128K, 256K, 512K, 1M   |
 | `jovian_rest_send_repeats` | 3                                 | Number of times that driver will try to send REST request           |
 | `san_api_port`             | 82                                | Rest port according to the settings in \[1\]                        |
 | `target_port`              | 3260                              | Port for iSCSI connections                                          |
@@ -172,7 +172,7 @@ chap_password_len=14
 driver_use_ssl=True
 iscsi_target_prefix=iqn.2016-04.com.open-e.cinder:
 jovian_pool=Pool-0
-jovian_block_size=128K
+jovian_block_size=64K
 jovian_rest_send_repeats=4
 san_api_port=82
 target_port=3260
@@ -188,7 +188,7 @@ chap_password_len=14
 driver_use_ssl=True
 iscsi_target_prefix=iqn.2016-04.com.open-e.cinder:
 jovian_pool=Pool-1
-jovian_block_size=128K
+jovian_block_size=64K
 jovian_rest_send_repeats=4
 san_api_port=82
 target_port=3260
@@ -215,7 +215,7 @@ chap_password_len=14
 driver_use_ssl=True
 iscsi_target_prefix=iqn.2016-04.com.open-e.cinder:
 jovian_pool=Pool-0
-jovian_block_size=128K
+jovian_block_size=64K
 jovian_rest_send_repeats=4
 san_api_port=82
 target_port=3260
