@@ -30,7 +30,7 @@ def is_snapshot(name):
 
 
 def idname(name):
-    """Convert id into snapshot name"""
+    """Convert id into name"""
 
     if name.startswith(('s_', 'v_', 't_')):
         return name[2:]
@@ -84,15 +84,20 @@ def is_hidden(name):
 
 
 def origin_snapshot(origin_str):
-    """Extracts original phisical snapshot name from origin record"""
+    """Extracts original physical snapshot name from origin record"""
 
     return origin_str.split("@")[1]
 
 
 def origin_volume(origin_str):
-    """Extracts original phisical volume name from origin record"""
+    """Extracts original physical volume name from origin record"""
 
     return origin_str.split("@")[0].split("/")[1]
+
+
+def clones_volume(clone_str):
+    """Extracts original physical volume name from clone record"""
+    return clone_str.split('/')[1]
 
 
 def full_name_volume(name):
