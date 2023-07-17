@@ -19,7 +19,6 @@ import re
 
 from oslo_log import log as logging
 
-from cinder import exception
 from cinder.i18n import _
 from cinder.volume.drivers.open_e.jovian_common import exception as jexc
 from cinder.volume.drivers.open_e.jovian_common import rest_proxy
@@ -33,19 +32,31 @@ class JovianRESTAPI(object):
     def __init__(self, config):
 
         self.pool = config.get('jovian_pool', 'Pool-0')
-
         self.rproxy = rest_proxy.JovianDSSRESTProxy(config)
 
         self.resource_dne_msg = (
             re.compile(r'^Zfs resource: .* not found in this collection\.$'))
 
+        self.resource_has_clones_msg = (
+            re.compile(r'^In order to delete a zvol, you must delete all of '
+                       'its clones first.$'))
+        self.resource_has_clones_class = (
+            re.compile(r'^opene.storage.zfs.ZfsOeError$'))
+
+        self.resource_has_snapshots_msg = (
+            re.compile(r"^cannot destroy '.*/.*': volume has children\nuse "
+                       "'-r' to destroy the following datasets:\n.*"))
+        self.resource_has_snapshots_class = (
+            re.compile(r'^zfslib.wrap.zfs.ZfsCmdError$'))
+
     def _general_error(self, url, resp):
         reason = "Request %s failure" % url
+        LOG.debug("error resp %s", resp)
         if 'error' in resp:
 
-            eclass = resp.get('class', 'Unknown')
-            code = resp.get('code', 'Unknown')
-            msg = resp.get('message', 'Unknown')
+            eclass = resp['error'].get('class', 'Unknown')
+            code = resp['error'].get('code', 'Unknown')
+            msg = resp['error'].get('message', 'Unknown')
 
             reason = _("Request to %(url)s failed with code: %(code)s "
                        "of type:%(eclass)s reason:%(message)s")
@@ -120,6 +131,8 @@ class JovianRESTAPI(object):
 
         :param volume_name:
         :param volume_size:
+        :param sparse: thin or thick volume flag
+        :param block_size: size of block
         :return:
         """
         LOG.debug("create volume start")
@@ -192,13 +205,11 @@ class JovianRESTAPI(object):
         return False
 
     def get_lun(self, volume_name):
-        """get_lun.
+        """get_lun
 
         GET /volumes/<volume_name>
-        :param volume_name:
-        :return:
-        {
-            "data":
+        :param volume_name: zvol id
+        :return: volume dict
             {
                 "origin": null,
                 "referenced": "65536",
@@ -232,9 +243,7 @@ class JovianRESTAPI(object):
                 "name": "v1",
                 "checksum": "on",
                 "refreservation": "1076101120"
-            },
-            "error": null
-        }
+            }
         """
         req = '/volumes/' + volume_name
 
@@ -356,7 +365,7 @@ class JovianRESTAPI(object):
 
         req = '/volumes/' + volume_name
         LOG.debug(("delete volume:%(vol)s "
-                   "recursively children:%(args)s"),
+                   "args:%(args)s"),
                   {'vol': volume_name,
                    'args': jbody})
 
@@ -380,10 +389,20 @@ class JovianRESTAPI(object):
 
         # Handle volume busy
         if resp["code"] == 500 and resp["error"]:
-            if resp["error"]["errno"] == 1000:
-                LOG.warning(
-                    "volume %s is busy", volume_name)
-                raise exception.VolumeIsBusy(volume_name=volume_name)
+            if 'message' in resp['error'] and \
+               'class' in resp['error']:
+                if self.resource_has_clones_msg.match(
+                        resp['error']['message']) and \
+                   self.resource_has_clones_class.match(
+                        resp['error']['class']):
+                    LOG.warning("volume %s is busy", volume_name)
+                    raise jexc.JDSSResourceIsBusyException(res=volume_name)
+                if self.resource_has_snapshots_msg.match(
+                        resp['error']['message']) and \
+                   self.resource_has_snapshots_class.match(
+                        resp['error']['class']):
+                    LOG.warning("volume %s is busy", volume_name)
+                    raise jexc.JDSSResourceIsBusyException(res=volume_name)
 
         raise jexc.JDSSRESTException('Failed to delete volume.')
 
@@ -745,6 +764,38 @@ class JovianRESTAPI(object):
 
         self._general_error(req, resp)
 
+    def count_rollback_dependents(self, volume_name, snapshot_name):
+        """Count volumes and snapshots affected by rollback
+
+        GET /volumes/<volume_name>/snapshots/<snapshot_name>/rollback
+
+        :param str volume_name: volume that is going to be reverted
+        :param str snapshot_name: snapshot of a volume above
+
+        :return: None
+        """
+        req = ('/volumes/%(vol)s/snapshots/'
+               '%(snap)s/rollback') % {'vol': volume_name,
+                                       'snap': snapshot_name}
+
+        LOG.debug("get rollback count for volume %(vol)s to snapshot %(snap)s",
+                  {'vol': volume_name,
+                   'snap': snapshot_name})
+
+        resp = self.rproxy.pool_request('GET', req)
+
+        if not resp["error"] and resp["code"] == 200:
+            return resp['data']
+
+        if resp["code"] == 500:
+            if resp["error"]:
+                if resp["error"]["errno"] == 1:
+                    raise jexc.JDSSResourceNotFoundException(
+                        res="%(vol)s@%(snap)s" % {'vol': volume_name,
+                                                  'snap': snapshot_name})
+
+        self._general_error(req, resp)
+
     def delete_snapshot(self,
                         volume_name,
                         snapshot_name,
@@ -781,11 +832,7 @@ class JovianRESTAPI(object):
         if force_umount:
             jbody['force_umount'] = True
 
-        resp = dict()
-        #if len(jbody) > 0:
         resp = self.rproxy.pool_request('DELETE', req, json_data=jbody)
-        #else:
-        #    resp = self.rproxy.pool_request('DELETE', req)
 
         if resp["code"] in (200, 201, 204):
             LOG.debug("snapshot %s deleted", snapshot_name)
@@ -793,8 +840,28 @@ class JovianRESTAPI(object):
 
         if resp["code"] == 500:
             if resp["error"]:
+                if resp["error"]["errno"] == 1000:
+                    raise jexc.JDSSSnapshotIsBusyException(
+                        snapshot=snapshot_name)
+        self._general_error(req, resp)
+
+    def get_snapshot(self, volume_name, snapshot_name):
+
+        req = (('/volumes/%(vol)s/snapshots/%(snap)s') %
+               {'vol': volume_name, 'snap': snapshot_name})
+
+        LOG.debug("get snapshots for volume %s ", volume_name)
+
+        resp = self.rproxy.pool_request('GET', req)
+
+        if not resp["error"] and resp["code"] == 200:
+            return resp["data"]
+
+        if resp['code'] == 500:
+            if 'message' in resp['error']:
                 if self.resource_dne_msg.match(resp['error']['message']):
-                    raise jexc.JDSSResourceNotFoundException(res=snapshot_name)
+                    raise jexc.JDSSResourceNotFoundException(volume_name)
+
         self._general_error(req, resp)
 
     def get_snapshots(self, volume_name):

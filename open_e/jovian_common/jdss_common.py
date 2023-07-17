@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from datetime import datetime
+
 from cinder import exception
 from cinder.i18n import _
 
@@ -29,10 +31,16 @@ def is_snapshot(name):
     return name.startswith("s_")
 
 
+def is_reverting(name):
+    """Return True if it is reverting"""
+
+    return name.startswith("r_")
+
+
 def idname(name):
     """Convert id into name"""
 
-    if name.startswith(('s_', 'v_', 't_')):
+    if name.startswith(('s_', 'v_', 't_', 'r_')):
         return name[2:]
 
     msg = _('Object name %s is incorrect') % name
@@ -56,21 +64,37 @@ def vname(name):
     return 'v_' + name
 
 
-def sname(name):
-    """Convert id into snapshot name"""
+def sname_to_id(sname):
 
-    if name.startswith('s_'):
-        return name
+    spl = sname.split('_')
 
-    if name.startswith('v_'):
-        msg = _('Attempt to use volume %s as a snapshot') % name
-        raise exception.VolumeBackendAPIException(message=msg)
+    if len(spl) == 2:
+        return (spl[1], None)
 
-    if name.startswith('t_'):
-        msg = _('Attempt to use deleted object %s as a snapshot') % name
-        raise exception.VolumeBackendAPIException(message=msg)
+    return (spl[1], spl[2])
 
-    return 's_' + name
+
+def sid_from_sname(name):
+    return sname_to_id(name)[0]
+
+
+def vid_from_sname(name):
+    return sname_to_id(name)[1]
+
+
+def sname(sid, vid):
+    """Convert id into snapshot name
+
+    :param: vid: volume id
+    :param: sid: snapshot id
+    """
+    if vid is None:
+        return 's_%(sid)s' % {'sid': sid}
+    return 's_%(sid)s_%(vid)s' % {'sid': sid, 'vid': vid}
+
+
+def sname_from_snap(snapshot_struct):
+    return snapshot_struct['name']
 
 
 def is_hidden(name):
@@ -83,21 +107,67 @@ def is_hidden(name):
     return False
 
 
-def origin_snapshot(origin_str):
-    """Extracts original physical snapshot name from origin record"""
+def rname(id):
+    """Convert id into snapshot name
 
-    return origin_str.split("@")[1]
-
-
-def origin_volume(origin_str):
-    """Extracts original physical volume name from origin record"""
-
-    return origin_str.split("@")[0].split("/")[1]
+    :param: vid: volume id
+    :param: sid: snapshot id
+    """
+    name = 'r_%(id)s' % {'id': id}
+    return name
 
 
-def clones_volume(clone_str):
-    """Extracts original physical volume name from clone record"""
-    return clone_str.split('/')[1]
+def rname_from_sname(sname):
+    """Convert id into snapshot name
+
+    :param: vid: volume id
+    :param: sid: snapshot id
+    """
+    if sname.startswith('s_'):
+        return rname(idname(sname))
+    msg = _('Expecting a snapshot name for %s') % sname
+    raise exception.VolumeBackendAPIException(message=msg)
+
+
+def sname_from_rname(rname):
+    """Convert id into snapshot name
+
+    :param: vid: volume id
+    :param: sid: snapshot id
+    """
+    if sname.startswith('r_'):
+        return sname(idname(rname))
+    msg = _('Expecting a revert name for %s') % sname
+    raise exception.VolumeBackendAPIException(message=msg)
+
+
+def origin_snapshot(vol):
+    """Extracts original physical snapshot name from volume dict"""
+    if 'origin' in vol and vol['origin'] is not None:
+        return vol['origin'].split("@")[1]
+    return None
+
+
+def origin_volume(vol):
+    """Extracts original physical volume name from volume dict"""
+
+    if 'origin' in vol and vol['origin'] is not None:
+        return vol['origin'].split("@")[0].split("/")[1]
+    return None
+
+
+def snapshot_clones(name):
+    """Return list of clones associated with snapshot or return empty list"""
+    out = []
+    clones = []
+    if 'clones' not in name:
+        return out
+    else:
+        clones = name['clones'].split(',')
+
+    for clone in clones:
+        out.append(clone.split('/')[1])
+    return out
 
 
 def full_name_volume(name):
@@ -112,6 +182,17 @@ def hidden(name):
     if len(name) < 2:
         raise exception.VolumeDriverException("Incorrect volume name")
 
-    if name[:2] == 'v_' or name[:2] == 's_':
+    if name[:2] == 'v_' or name[:2] == 's_' or name[:2] == 'r_':
         return 't_' + name[2:]
     return 't_' + name
+
+
+def get_newest_snapshot_name(snapshots):
+    newest_date = None
+    sname = None
+    for snap in snapshots:
+        current_date = datetime.strptime(snap['creation'], "%Y-%m-%d %H:%M:%S")
+        if newest_date is None or current_date > newest_date:
+            newest_date = current_date
+            sname = snap['name']
+    return sname
