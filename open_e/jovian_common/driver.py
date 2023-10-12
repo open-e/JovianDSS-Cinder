@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
 from oslo_log import log as logging
 from oslo_utils import units as o_units
 
@@ -51,25 +50,42 @@ class JovianDSSDriver(object):
 
         self.ra = rest.JovianRESTAPI(config)
 
-    def create_volume(self, volume_name, volume_size, sparse=False,
+    def rest_config_is_ok(self):
+        """Check config correctness by checking pool availability"""
+
+        return self.ra.is_pool_exists()
+
+    def get_active_ifaces(self):
+        """Return list of ip addresses for iSCSI connection"""
+
+        return self.jovian_hosts
+
+    def get_provider_location(self, volume_name):
+        """Return volume iscsiadm-formatted provider location string."""
+        return '%(host)s:%(port)s,1 %(name)s 0' % {
+            'host': self.ra.get_active_host(),
+            'port': self.jovian_iscsi_target_portal_port,
+            'name': self._get_target_name(volume_name)}
+
+    def create_volume(self, volume_id, volume_size, sparse=False,
                       block_size=None):
         """Create a volume.
 
-        :param str volume_name: volume id
+        :param str volume_id: volume id
         :param int volume_size: size in Gi
         :param bool sparse: thin or thick volume flag (default thin)
         :param int block_size: size of block (default None)
 
         :return: None
         """
-        vname = jcom.vname(volume_name)
+        vname = jcom.vname(volume_id)
         LOG.debug("Create volume volume:%(name)s with size:%(size)s",
-                  {'name': volume_name, 'size': volume_size})
+                  {'name': volume_id, 'size': volume_size})
 
         self.ra.create_lun(vname,
                            volume_size * o_units.Gi,
-                           sparse=self.jovian_sparse,
-                           block_size=self.block_size)
+                           sparse=sparse,
+                           block_size=block_size)
         return
 
     def _promote_newest_delete(self, vname, snapshots=None):
@@ -124,8 +140,8 @@ class JovianDSSDriver(object):
         '''Delete volume and its source snapshot if required
 
         This function deletes volume.
-        If volume is a clone it will check its source snapshot and
-        deletes if it is not a dedicated snapshot, but an intermediate one.
+        If volume is a clone it will check its source snapshot if
+        one is originates from volume to delete.
 
         :param str vname: physical volume id
         :param bool recursive: recursive flag (default False)
@@ -153,7 +169,9 @@ class JovianDSSDriver(object):
                 'origin' in vol and \
                 vol['origin'] is not None:
             if jcom.is_volume(jcom.origin_snapshot(vol)) or \
-                    jcom.is_hidden(jcom.origin_snapshot(vol)):
+                    jcom.is_hidden(jcom.origin_snapshot(vol)) or \
+                    (jcom.vid_from_sname(jcom.origin_snapshot(vol))
+                     == jcom.idname(vname)):
                 self.ra.delete_snapshot(jcom.origin_volume(vol),
                                         jcom.origin_snapshot(vol),
                                         recursively_children=True,
@@ -196,12 +214,11 @@ class JovianDSSDriver(object):
                         if jcom.idname(vname) != jcom.vid_from_sname(cvname):
                             self._promote_newest_delete(cvname)
                             update = True
-            if update:
-                snapshots = self.ra.get_snapshots(vname)
-            return snapshots
+        if update:
+            snapshots = self.ra.get_snapshots(vname)
+        return snapshots
 
     def _list_busy_snapshots(self, vname, snapshots,
-                             exclude_mountpoints=False,
                              exclude_dedicated_volumes=False) -> list:
         """List all volume snapshots with clones
 
@@ -212,8 +229,6 @@ class JovianDSSDriver(object):
         Keyword arguments:
         :param str vname: zvol id
         :param list snapshots: list of snapshots data dicts
-        :param bool exclude_mountpoints -- list snapshot that is mountable,
-                                   has snapshot like clone (default False)
         :param bool exclude_dedicated_volumes: list snapshots that has clones
                                         (default False)
 
@@ -226,8 +241,6 @@ class JovianDSSDriver(object):
             clones = jcom.snapshot_clones(snap)
             add = False
             for cvname in clones:
-                if exclude_mountpoints and jcom.is_snapshot(cvname):
-                    continue
                 if exclude_dedicated_volumes and jcom.is_volume(cvname):
                     continue
                 add = True
@@ -236,57 +249,26 @@ class JovianDSSDriver(object):
 
         return out
 
-    def _list_iddle_snapshots(self, snapshots):
-        """List iddle snapshots
-
-        Go through list of snapshots and return
-        thouse who have no clones
-        """
-
-        out = []
+    def _clean_volume_snapshots_mount_points(self, vname, snapshots):
+        update = False
         for snap in snapshots:
-            if len(jcom.snapshot_clones(snap)) == 0:
-                out.append(snap)
-
-        return out
-
-    def _list_volume_snapshots_mount_points(self, vname, snapshots):
-
-        out = []
-        for snap in snapshots:
-            if jcom.is_snapshot(snap['name']):
-                clones = jcom.snapshot_clones(snap)
-                for clone in [c for c in clones if jcom.is_snapshot(c)]:
-                    out.append(clone)
-        return out
-
-    def _list_volume_snapshot_volumes(self, vname, snap,
-                                      clone_from_volume=False):
-
-        clones = jcom.snapshot_clones(snap)
-        out = []
-        for clone in [c for c in clones if jcom.is_volume(c)]:
-            if clone_from_volume:
-                if jcom.is_volume(snap['name']):
-                    out.append(clone)
-            else:
-                out.append(clone)
-        return out
-
-    def _delete_volume_snapshot_mount_point(self, mpname):
-        try:
-            self.ra.delete_lun(mpname,
-                               force_umount=True,
-                               recursively_children=True)
-        except jexc.JDSSResourceNotFoundException:
-            LOG.debug('unable to delete mount for snapshot %s',
-                      mpname)
-            return None
-
-        return
+            clones = jcom.snapshot_clones(snap)
+            for cname in [c for c in clones if jcom.is_snapshot(c)]:
+                update = True
+                self._delete_volume(cname, cascade=True)
+        if update:
+            snapshots = self.ra.get_snapshots(vname)
+        return snapshots
 
     def _delete_volume(self, vname, cascade=False):
+        """_delete_volume delete routine containing delete logic
 
+        :param str vname: physical volume id
+        :param bool cascade: flag for cascade volume deletion
+            with its snapshots
+
+        :return: None
+        """
         try:
             self.ra.delete_lun(vname,
                                force_umount=True,
@@ -323,6 +305,7 @@ class JovianDSSDriver(object):
                 raise exception.VolumeIsBusy('Volume has snapshots')
 
         snaps = self._clean_garbage_resources(vname, snapshots)
+        snaps = self._clean_volume_snapshots_mount_points(vname, snapshots)
 
         self._promote_newest_delete(vname, snapshots=snaps)
 
@@ -338,48 +321,18 @@ class JovianDSSDriver(object):
 
         self._delete_volume(vname, cascade=cascade)
 
-    def _hide_object(self, vname):
-        """Mark volume/snapshot as hidden
-
-        :param vname: physical volume name
-        """
-        rename = {'name': jcom.hidden(vname)}
-        try:
-            self.ra.modify_lun(vname, rename)
-        except jexc.JDSSException as jerr:
-            emsg = _('Failure in hiding %(object)s, err: %(error)s,'
-                     ' object has to be removed manually') % {'object': vname,
-                                                              'error': jerr}
-            LOG.warning(emsg)
-            raise exception.VolumeBackendAPIException(emsg)
-
-    def _unhide_object(self, hvname, is_snapshot=False):
-        """Un mark volume/snapshot as hidden
-
-        :param vname: physical volume name
-        """
-        vname = jcom.vname(jcom.idname(hvname))
-        rename = {'name': jcom.hidden(vname)}
-        try:
-            self.ra.modify_lun(hvname, rename)
-        except jexc.JDSSException as jerr:
-            emsg = _('Failure in un hiding %(object)s, err: %(error)s,'
-                     ' object has to be removed manually') % {'object': vname,
-                                                              'error': jerr}
-            LOG.warning(emsg)
-            raise exception.VolumeBackendAPIException(emsg)
-
     def _clone_object(self, cvname, sname, ovname,
-                      sparse=None, create_snapshot=False):
+                      sparse=None,
+                      create_snapshot=False):
         """Creates a clone of specified object
 
         Will create snapshot if it is not provided
 
-        :param: cvname: clone volume name
-        :param: sname: snapshot name
-        :param: ovname: original volume name
-        :param: sparse: sparsines property of new volume, can take values of:
-                        True
+        :param str cvname: clone volume name
+        :param str sname: snapshot name
+        :param str ovname: original volume name
+        :param bool sparse: sparse property of new volume
+        :param bool create_snapshot:
         """
         LOG.debug('cloning %(ovname)s to %(coname)s', {
             "ovname": ovname,
@@ -393,10 +346,8 @@ class JovianDSSDriver(object):
                 sname,
                 ovname,
                 sparse=sparse)
-        except jexc.JDSSResourceExistsException as jerr:
-            raise exception.Duplicate() from jerr
         except jexc.JDSSException as jerr:
-            # This is a garbege collecting section responsible for cleaning
+            # This is a garbage collecting section responsible for cleaning
             # all the mess of request failed
             if create_snapshot:
                 try:
@@ -425,42 +376,19 @@ class JovianDSSDriver(object):
         self.ra.extend_lun(jcom.vname(volume_name),
                            int(new_size) * o_units.Gi)
 
-    def _resize_if_neccessary(self, vname, size, vol=None):
-        """Resizes volume to size
-
-        Method will resize zvol with vname to size specified with size
-        or do nothing if zvol already have required size.
-        Method will use vol struct(in case one is provided) to make decision
-        if extension is needed or will requst vol data itself
-
-        :param str vname: zvol name
-        :param int size: target size in Gi
-        :param dict vol: volume reference
-        :raises JDSSException: if request fils
-
-        :return: None
-        """
-        vsize = None
-        if vol:
-            vsize = vol['volsize']
-        else:
-            vsize = int(self.ra.get_lun(vname)['volsize'])
-
-        if int(vsize) != o_units.Gi * int(size):
-            self.resize_volume(vname, int(size))
-
-        return
-
     def create_cloned_volume(self,
                              clone_name,
                              volume_name,
                              size,
-                             snapshot_name=None):
+                             snapshot_name=None,
+                             sparse=False):
         """Create a clone of the specified volume.
 
         :param str clone_name: new volume id
         :param volume_name: original volume id
         :param int size: size in Gi
+        :param str snapshot_name: openstack snapshot id to use for cloning
+        :param bool sparse: sparse flag
         """
         cvname = jcom.vname(clone_name)
 
@@ -472,10 +400,14 @@ class JovianDSSDriver(object):
 
         if snapshot_name:
             sname = jcom.sname(snapshot_name, volume_name)
-            self._clone_object(cvname, sname, ovname, create_snapshot=False)
+            self._clone_object(cvname, sname, ovname,
+                               create_snapshot=False,
+                               sparse=sparse)
         else:
             sname = jcom.vname(clone_name)
-            self._clone_object(cvname, sname, ovname, create_snapshot=True)
+            self._clone_object(cvname, sname, ovname,
+                               create_snapshot=True,
+                               sparse=sparse)
 
         clone_size = 0
 
@@ -490,7 +422,7 @@ class JovianDSSDriver(object):
 
         try:
             if int(clone_size) < o_units.Gi * int(size):
-                self.resize_volume(volume_name, int(size))
+                self.resize_volume(clone_name, int(size))
 
         except jexc.JDSSException as jerr:
             # If volume can't be set to a proper size make sure to clean it
@@ -516,8 +448,56 @@ class JovianDSSDriver(object):
         sname = jcom.sname(snapshot_name, volume_name)
 
         self.ra.create_snapshot(vname, sname)
-        # TODO: remove this
-        self.ra.get_snapshots(vname)
+
+    def create_export_snapshot(self, snapshot_name, volume_name,
+                               provider_auth):
+        """Creates iscsi resources needed to start using snapshot
+
+        :param str snapshot_name: openstack snapshot id
+        :param str volume_name: openstack volume id
+        :param str provider_auth: space-separated triple
+              '<auth method> <auth username> <auth password>'
+        """
+
+        sname = jcom.sname(snapshot_name, volume_name)
+        ovname = jcom.vname(volume_name)
+        self._clone_object(sname, sname, ovname,
+                           sparse=True,
+                           create_snapshot=False)
+        try:
+            self._ensure_target_volume(snapshot_name, sname, provider_auth,
+                                       ro=True)
+        except jexc.JDSSException as jerr:
+            self._delete_volume(sname, cascade=True)
+            raise jerr
+
+    def remove_export(self, volume_name):
+        """Remove iscsi target created to make volume attachable
+
+        :param str volume_name: openstack volume id
+        """
+        vname = jcom.vname(volume_name)
+        try:
+            self._remove_target_volume(volume_name, vname)
+        except jexc.JDSSException as jerr:
+            LOG.warning(jerr)
+
+    def remove_export_snapshot(self, snapshot_name, volume_name):
+        """Remove tmp vol and iscsi target created to make snap attachable
+
+        :param str snapshot_name: openstack snapshot id
+        :param str volume_name: openstack volume id
+        """
+
+        sname = jcom.sname(snapshot_name, volume_name)
+
+        try:
+            self._remove_target_volume(snapshot_name, sname)
+        except jexc.JDSSException as jerr:
+            self._delete_volume(sname, cascade=True)
+            raise jerr
+
+        self._delete_volume(sname, cascade=True)
 
     def _delete_snapshot(self, vname, sname):
         """Delete snapshot
@@ -546,7 +526,7 @@ class JovianDSSDriver(object):
                 self._promote_newest_delete(cvname)
             if jcom.is_volume(cvname):
                 LOG.debug('Will not delete snap %(snap)s,'
-                          'becasue it is used by %(vol)',
+                          'becasue it is used by %(vol)s',
                           {'snap': sname,
                            'vol': cvname})
                 busy = True
@@ -568,3 +548,267 @@ class JovianDSSDriver(object):
         sname = jcom.sname(snapshot_name, volume_name)
 
         self._delete_snapshot(vname, sname)
+
+    def _ensure_target_volume(self, id, vid, provider_auth, ro=False):
+        """Checks if target configured properly and volume is attached to it
+
+        :param str id: id that would be used for target naming
+        :param str vname: physical volume id
+        :param str provider_auth: space-separated triple
+              '<auth method> <auth username> <auth password>'
+        """
+        LOG.debug("ensure volume %s assigned to a proper target", id)
+
+        target_name = self._get_target_name(id)
+
+        if not provider_auth:
+            msg = _("volume %s is missing provider_auth") % jcom.idname(id)
+            raise jexc.JDSSException(msg)
+
+        if not self.ra.is_target(target_name):
+
+            return self._create_target_volume(id, vid, provider_auth)
+
+        if not self.ra.is_target_lun(target_name, vid):
+            self._attach_target_volume(target_name, vid)
+
+        (__, auth_username, auth_secret) = provider_auth.split()
+        chap_cred = {"name": auth_username,
+                     "password": auth_secret}
+
+        try:
+            users = self.ra.get_target_user(target_name)
+            if len(users) == 1:
+                if users[0]['name'] == chap_cred['name']:
+                    return
+                self.ra.delete_target_user(
+                    target_name,
+                    users[0]['name'])
+            for user in users:
+                self.ra.delete_target_user(
+                    target_name,
+                    user['name'])
+            self._set_target_credentials(target_name, chap_cred)
+
+        except jexc.JDSSException as jerr:
+            self.ra.delete_target(target_name)
+            raise exception.VolumeBackendAPIException(jerr)
+
+    def _get_target_name(self, volume_id):
+        """Return iSCSI target name to access volume."""
+        return f'{self.jovian_target_prefix}{volume_id}'
+
+    def _get_iscsi_properties(self, volume_id, provider_auth, multipath=False):
+        """Return dict according to cinder/driver.py implementation.
+
+        :param volume_id: UUID of volume, might take snapshot UUID
+        :param str provider_auth: space-separated triple
+              '<auth method> <auth username> <auth password>'
+        :return:
+        """
+        tname = self._get_target_name(volume_id)
+        iface_info = []
+        if multipath:
+            iface_info = self.get_active_ifaces()
+            if not iface_info:
+                raise exception.InvalidConfigurationValue(
+                    _('No available interfaces '
+                      'or config excludes them'))
+
+        iscsi_properties = {}
+
+        if multipath:
+            iscsi_properties['target_iqns'] = []
+            iscsi_properties['target_portals'] = []
+            iscsi_properties['target_luns'] = []
+            LOG.debug('tpaths %s.', iface_info)
+            for iface in iface_info:
+                iscsi_properties['target_iqns'].append(
+                    self._get_target_name(volume_id))
+                iscsi_properties['target_portals'].append(
+                    iface +
+                    ":" +
+                    str(self.jovian_iscsi_target_portal_port))
+                iscsi_properties['target_luns'].append(0)
+        else:
+            iscsi_properties['target_iqn'] = tname
+            iscsi_properties['target_portal'] = (
+                self.ra.get_active_host() +
+                ":" +
+                str(self.jovian_iscsi_target_portal_port))
+
+        iscsi_properties['target_discovered'] = False
+
+        if provider_auth:
+            (auth_method, auth_username, auth_secret) = provider_auth.split()
+
+            iscsi_properties['auth_method'] = auth_method
+            iscsi_properties['auth_username'] = auth_username
+            iscsi_properties['auth_password'] = auth_secret
+
+        iscsi_properties['target_lun'] = 0
+        return iscsi_properties
+
+    def _remove_target_volume(self, id, vid):
+        """_remove_target_volume
+
+        Ensure that volume is not attached to target and target do not exists.
+        """
+
+        target_name = self._get_target_name(id)
+        LOG.debug("remove export")
+        LOG.debug("detach volume:%(vol)s from target:%(targ)s.", {
+            'vol': id,
+            'targ': target_name})
+
+        try:
+            self.ra.detach_target_vol(target_name, vid)
+        except jexc.JDSSResourceNotFoundException as jerrrnf:
+            LOG.debug('failed to remove resource %(t)s because of %(err)s', {
+                't': target_name,
+                'err': jerrrnf.args[0]})
+        except jexc.JDSSException as jerr:
+            LOG.warning('failed to Terminate_connection for target %(targ)s '
+                        'because of: %(err)s', {
+                          'targ': target_name,
+                          'err': jerr.args[0]})
+            raise jerr
+
+        LOG.debug("delete target: %s", target_name)
+
+        try:
+            self.ra.delete_target(target_name)
+        except jexc.JDSSResourceNotFoundException as jerrrnf:
+            LOG.debug('failed to remove resource %(target)s because '
+                      'of %(err)s', {'target': target_name,
+                                     'err': jerrrnf.args[0]})
+
+        except jexc.JDSSException as jerr:
+            LOG.warning('Failed to Terminate_connection for target %(targ)s '
+                        'because of: %(err)s ', {
+                          'targ': target_name,
+                          'err': jerr.args[0]})
+
+            raise jerr
+
+    def ensure_export(self, volume_id, provider_auth):
+
+        vname = jcom.vname(volume_id)
+
+        self._ensure_target_volume(volume_id, vname, provider_auth)
+
+    def initialize_connection(self, volume_id, provider_auth,
+                              snapshot_id=None,
+                              multipath=False):
+        """Ensures volume is ready for connection and return connection data
+
+        Ensures that particular volume is ready to be used over iscsi
+        with credentials provided in provider_auth
+        If snapshot name is provided method will ensure that connection
+        leads to read only volume object associated with particular snapshot
+
+        :param str volume_id: Volume id string
+        :param str provider_auth: space-separated triple
+              '<auth method> <auth username> <auth password>'
+        :param str snapshot_id: id of snapshot that should be connected
+        :param bool multipath: specifies if multypath should be used
+        """
+
+        id_of_disk_to_attach = volume_id
+        vid = jcom.vname(volume_id)
+        if provider_auth is None:
+            raise jexc.JDSSException(_("CHAP credentials missing"))
+        if snapshot_id:
+            id_of_disk_to_attach = snapshot_id
+            vid = jcom.sname(snapshot_id, volume_id)
+        iscsi_properties = self._get_iscsi_properties(id_of_disk_to_attach,
+                                                      provider_auth,
+                                                      multipath=multipath)
+        if snapshot_id:
+            self._ensure_target_volume(id_of_disk_to_attach,
+                                       vid,
+                                       provider_auth,
+                                       mode='ro')
+        else:
+            self._ensure_target_volume(id_of_disk_to_attach,
+                                       vid,
+                                       provider_auth)
+
+        LOG.debug(
+                "initialize_connection for physical disk %(vid)s with %(id)s",
+                {'vid': vid, 'id': id_of_disk_to_attach})
+
+        return {
+            'driver_volume_type': 'iscsi',
+            'data': iscsi_properties,
+        }
+
+    def _create_target_volume(self, id, vid, provider_auth):
+        """Creates target and attach volume to it
+
+        :param id: uuid of particular resource
+        :param vid: physical volume id, might identify snapshot mount
+        :param str provider_auth: space-separated triple
+              '<auth method> <auth username> <auth password>'
+        :return:
+        """
+        LOG.debug("create target and attach volume %s to it", vid)
+
+        target_name = self._get_target_name(id)
+
+        (__, auth_username, auth_secret) = provider_auth.split()
+        chap_cred = {"name": auth_username,
+                     "password": auth_secret}
+
+        # Create target
+        self.ra.create_target(target_name, use_chap=True)
+
+        # Attach volume
+        self._attach_target_volume(target_name, vid)
+
+        # Set credentials
+        self._set_target_credentials(target_name, chap_cred)
+
+    def _attach_target_volume(self, target_name, vname):
+        """Attach target to volume and handles exceptions
+
+        Attempts to set attach volume to specific target.
+        In case of failure will remove target.
+        :param target_name: name of target
+        :param use_chap: flag for using chap
+        """
+        try:
+            self.ra.attach_target_vol(target_name, vname)
+        except jexc.JDSSException as jerr:
+            msg = ('Unable to attach volume to target {target} '
+                   'because of {error}.')
+            LOG.warning(msg, {"target": target_name, "error": jerr})
+            self.ra.delete_target(target_name)
+            raise jerr
+
+    def _set_target_credentials(self, target_name, cred):
+        """Set CHAP configuration for target and handle exceptions
+
+        Attempts to set CHAP credentials for specific target.
+        In case of failure will remove target.
+        :param target_name: name of target
+        :param cred: CHAP user name and password
+        """
+        try:
+            self.ra.create_target_user(target_name, cred)
+
+        except jexc.JDSSException as jerr:
+            try:
+                self.ra.delete_target(target_name)
+            except jexc.JDSSException:
+                pass
+
+            err_msg = (('Unable to create user %(user)s '
+                        'for target %(target)s '
+                        'because of %(error)s.') % {
+                            'target': target_name,
+                            'user': cred['name'],
+                            'error': jerr})
+
+            LOG.debug(err_msg)
+            raise jexc.JDSSException(_(err_msg))

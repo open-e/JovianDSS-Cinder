@@ -156,14 +156,14 @@ def origin_volume(vol):
     return None
 
 
-def snapshot_clones(name):
+def snapshot_clones(snap):
     """Return list of clones associated with snapshot or return empty list"""
     out = []
     clones = []
-    if 'clones' not in name:
+    if 'clones' not in snap:
         return out
     else:
-        clones = name['clones'].split(',')
+        clones = snap['clones'].split(',')
 
     for clone in clones:
         out.append(clone.split('/')[1])

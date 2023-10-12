@@ -32,7 +32,7 @@ LOG = logging.getLogger(__name__)
 
 
 class JovianDSSRESTProxy(object):
-    """Jovian REST API proxy."""
+    """Jovian REST API proxy"""
 
     def __init__(self, config):
         """:param config: list of config values."""
@@ -62,7 +62,7 @@ class JovianDSSRESTProxy(object):
         self.user = config.get('san_login', 'admin')
         self.password = config.get('san_password', 'admin')
         self.verify = config.get('driver_ssl_cert_verify', True)
-        self.cert = config.get('driver_ssl_cert_path')
+        self.cert = config.get('driver_ssl_cert_path', None)
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -157,9 +157,6 @@ class JovianDSSRESTProxy(object):
         response_obj = self.session.send(pr)
 
         ret['code'] = response_obj.status_code
-        LOG.debug("response code %(code)s data %(data)s",
-                  {'code': response_obj.status_code,
-                   'data': response_obj.text})
         if ret['code'] == 204:
             ret["data"] = None
             return ret

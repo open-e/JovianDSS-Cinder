@@ -27,7 +27,7 @@ LOG = logging.getLogger(__name__)
 
 
 class JovianRESTAPI(object):
-    """Jovian REST API proxy."""
+    """Jovian REST API"""
 
     def __init__(self, config):
 
@@ -263,8 +263,8 @@ class JovianRESTAPI(object):
     def modify_lun(self, volume_name, prop=None):
         """Update volume properties
 
-        :prop volume_name: volume name
-        :prop prop: dictionary
+        :param volume_name: volume name
+        :param prop: dictionary
             {
                 <property>: <value>
             }
@@ -298,8 +298,8 @@ class JovianRESTAPI(object):
     def modify_property_lun(self, volume_name, prop=None):
         """Change volume properties
 
-        :prop: volume_name: volume name
-        :prop: prop: dictionary of volume properties in format
+        :param volume_name: volume name
+        :param prop: dictionary of volume properties in format
                 { "property_name": "<name of property>",
                   "property_value":"<value of a property>"}
         """
@@ -604,17 +604,26 @@ class JovianRESTAPI(object):
 
         self._general_error(req, resp)
 
-    def attach_target_vol(self, target_name, lun_name, lun_id=0):
+    def attach_target_vol(self, target_name, lun_name,
+                          lun_id=0,
+                          mode=None):
         """attach_target_vol.
 
         POST /san/iscsi/targets/<target_name>/luns
-        :param target_name:
-        :param lun_name:
+        :param target_name: name of the target
+        :param lun_name: phisical volume name to be attached
+        :param lun_id: id that would be assigned to volume
+        :param mode: one of "wt", "wb" or "ro"
         :return:
         """
         req = '/san/iscsi/targets/%s/luns' % target_name
 
         jbody = {"name": lun_name, "lun": lun_id}
+        if mode is not None:
+            if mode in ['wt', 'wb', 'ro']:
+                jbody['mode'] = mode
+            else:
+                raise jexc.JDSSException(_("Incoret mode for target %s" % mode))
         LOG.debug("atach volume %(vol)s to target %(tar)s",
                   {'vol': lun_name,
                    'tar': target_name})
@@ -712,6 +721,9 @@ class JovianRESTAPI(object):
 
         if 'sparse' in options:
             jbody['sparse'] = options['sparse']
+
+        if 'ro' in options:
+            jbody['ro'] = options['sparse']
 
         LOG.debug("create volume %(vol)s from snapshot %(snap)s",
                   {'vol': volume_name,
